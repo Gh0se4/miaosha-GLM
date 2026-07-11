@@ -30,10 +30,8 @@
 
     function cacheBatchPreview(data) {
       if (!data || data.code !== 200 || !data.data || !Array.isArray(data.data.productList) || data.data.productList.length === 0) {
-        console.log('[early] batch-preview not cached: code=' + (data&&data.code) + ' hasData=' + !!(data&&data.data&&data.data.productList));
         return;
       }
-      console.log('[early] batch-preview cached: ' + data.data.productList.length + ' products');
       window[WP_PD] = data.data.productList;
       try {
         sessionStorage.setItem(_NS + 'bp', JSON.stringify(data));
@@ -46,7 +44,6 @@
         var p = fn.apply(this, arguments);
         return p.then(function(response) {
           if (url && String(url).indexOf('/api/biz/pay/batch-preview') !== -1 && response && response.clone) {
-            console.log('[early] fetch intercepted batch-preview, status=' + response.status);
             try {
               response.clone().json().then(cacheBatchPreview).catch(function(e) {
                 console.log('[early] clone/parse failed:', e.message);
@@ -87,7 +84,6 @@
         this.addEventListener('load', function() {
           try {
             var d = JSON.parse(this.responseText);
-            console.log('[early] XHR intercepted batch-preview, code=' + (d&&d.code));
             cacheBatchPreview(d);
           } catch(e) { console.log('[early] XHR parse error:', e.message); }
         });

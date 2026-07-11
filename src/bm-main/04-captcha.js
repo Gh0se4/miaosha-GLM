@@ -145,9 +145,10 @@ function applyClicks(coordString, imgW, imgH) {
   coords = coords.slice(0, expectedClicks);
 
   // Find clickable captcha area that's actually visible on screen
-  var bgEl = document.querySelector('.tencent-captcha-dy__image-area');
-  if (!bgEl) bgEl = document.querySelector('.tencent-captcha-dy__verify-bg-img');
-  if (!bgEl) bgEl = document.querySelector('.tencent-captcha-dy__bg-placeholder');
+  // Dispatch clicks on the captcha warp (container) not just image-area
+  var bgEl = document.querySelector('.tencent-captcha-dy__warp')
+    || document.querySelector('.tencent-captcha-dy__image-area')
+    || document.querySelector('.tencent-captcha-dy__verify-bg-img');
   if (!bgEl) { console.log('[OCR] no captcha element'); return; }
 
   var rect = bgEl.getBoundingClientRect();
