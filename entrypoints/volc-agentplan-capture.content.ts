@@ -4,12 +4,39 @@ import { volcengineAgentplanAdapter } from '../lib/platform';
 import { seedVolcengineAgentplanCatalog } from '../lib/platform/adapters/volcengine-agentplan/product-probe';
 import { createAuthStore, createProductCatalogStore } from '../lib/platform/shared/stores';
 import type { PlatformAuth } from '../lib/platform';
+import { type XhrRequestOptions, type XhrResponse, setMainWorldFetcher } from '../lib/platform/adapters/volcengine-shared/request';
 
 const authStore = createAuthStore(true);
 const productCatalogStore = createProductCatalogStore(true);
 
 function postToOverlay(msg: any) {
   window.postMessage({ __volc_overlay: true, ...msg }, '*');
+}
+
+function mainWorldFetch(opts: {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+}): Promise<{ status: number; statusText: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    const reqId = Math.random().toString(36).slice(2);
+    function handler(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data?.__volc_overlay || ev.data.type !== 'DO_FETCH_RESULT' || ev.data.reqId !== reqId) return;
+      window.removeEventListener('message', handler);
+      if (ev.data.ok) {
+        resolve({ status: ev.data.status, statusText: ev.data.statusText, body: ev.data.body });
+      } else {
+        reject(new Error(ev.data.error || 'fetch error'));
+      }
+    }
+    window.addEventListener('message', handler);
+    window.postMessage({ __volc_cmd: true, type: 'DO_FETCH', reqId, opts }, '*');
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error('MAIN world fetch timeout'));
+    }, 15000);
+  });
 }
 
 function log(stage: string, payload?: any) {
@@ -34,6 +61,19 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   async main() {
+    // Route API requests through MAIN world fetch to avoid extension-origin WAF
+    setMainWorldFetcher(async (fetchOpts: XhrRequestOptions): Promise<XhrResponse> => {
+      const result = await mainWorldFetch({
+        method: fetchOpts.method || 'GET',
+        url: fetchOpts.url,
+        headers: fetchOpts.headers || {},
+        body: fetchOpts.body,
+      });
+      let data: any;
+      try { data = JSON.parse(result.body); } catch { data = result.body; }
+      return { status: result.status, statusText: result.statusText, data, headers: {} };
+    });
+
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('/volc-agentplan-main.js');
     script.dataset.version = chrome.runtime.getManifest().version;

@@ -62,8 +62,8 @@ export class BigmodelPaymentLauncher implements IPaymentLauncher {
       const setVerified = () => {
         try {
           setReactive(pay, 'captchaVerified', true);
-          setReactive(pay, 'captchaTicket', pay.$data.captchaTicket || 'miaosha-bypass');
-          setReactive(pay, 'captchaRandstr', pay.$data.captchaRandstr || 'miaosha-bypass');
+          setReactive(pay, 'captchaTicket', pay.$data.captchaTicket || 'qg-bypass');
+          setReactive(pay, 'captchaRandstr', pay.$data.captchaRandstr || 'qg-bypass');
           if (typeof pay.$forceUpdate === 'function') pay.$forceUpdate();
         } catch {
           // ignore

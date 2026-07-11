@@ -21,7 +21,7 @@
       <span class="accent-bar" style="background: linear-gradient(180deg, var(--violet), var(--primary)); box-shadow: 0 0 14px rgba(99,102,241,0.35);"></span>
       <h3>工作原理</h3>
     </div>
-    <p class="section-note">秒杀时间轴、发射策略与 soldOut 探测逻辑的完整说明。</p>
+    <p class="section-note">抢购时间轴、发射策略与 soldOut 探测逻辑的完整说明。</p>
 
     <div class="readme-panel">
       <div class="doc-hero">

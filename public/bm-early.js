@@ -7,20 +7,36 @@
 //    already has to fetch this endpoint; reusing its response lets us avoid a
 //    duplicate request that often gets rejected with WAF/rate-limit code 555
 //    while the page's request succeeds.
+// 3. Generates a random session namespace (_NS) to avoid static detection of
+//    injected DOM IDs, postMessage markers, and storage keys.
 (function() {
-  if (window.__bm_originalFetch) return;
+  // ── Namespace generation ────────────────────────────────────────────
+  var _NS = 'b' + Math.random().toString(36).slice(2, 8);
+  try { sessionStorage.setItem('_st', _NS); } catch(e) {}
+
+  // Internal window properties use namespace-prefixed keys to avoid detection
+  var WP_OF = _NS + 'of';  // original fetch
+  var WP_NS = _NS + 'ns';  // namespace
+  var WP_PD = _NS + 'pd';  // batch preview data
+  var WP_OX = _NS + 'ox';  // original XHR
+
+  window[WP_NS] = _NS;
+
+  if (window[WP_OF]) return;
   try {
     var nativeFetch = window.fetch;
-    window.__bm_originalFetch = nativeFetch;
-    window.__bm_batchPreviewData = null;
+    window[WP_OF] = nativeFetch;
+    window[WP_PD] = null;
 
     function cacheBatchPreview(data) {
       if (!data || data.code !== 200 || !data.data || !Array.isArray(data.data.productList) || data.data.productList.length === 0) {
+        console.log('[early] batch-preview not cached: code=' + (data&&data.code) + ' hasData=' + !!(data&&data.data&&data.data.productList));
         return;
       }
-      window.__bm_batchPreviewData = data.data.productList;
+      console.log('[early] batch-preview cached: ' + data.data.productList.length + ' products');
+      window[WP_PD] = data.data.productList;
       try {
-        sessionStorage.setItem('bm_batch_preview', JSON.stringify(data));
+        sessionStorage.setItem(_NS + 'bp', JSON.stringify(data));
       } catch(e) {}
     }
 
@@ -30,9 +46,12 @@
         var p = fn.apply(this, arguments);
         return p.then(function(response) {
           if (url && String(url).indexOf('/api/biz/pay/batch-preview') !== -1 && response && response.clone) {
+            console.log('[early] fetch intercepted batch-preview, status=' + response.status);
             try {
-              response.clone().json().then(cacheBatchPreview).catch(function() {});
-            } catch(e) {}
+              response.clone().json().then(cacheBatchPreview).catch(function(e) {
+                console.log('[early] clone/parse failed:', e.message);
+              });
+            } catch(e) { console.log('[early] clone error:', e.message); }
           }
           return response;
         });
@@ -57,6 +76,23 @@
       window.fetch = wrappedFetch;
     }
 
-    window.__bm_originalXHR = window.XMLHttpRequest;
+    window[WP_OX] = window.XMLHttpRequest;
+
+    // Also intercept XHR for batch-preview (before bm-main.js loads)
+    var origXHROpen = XMLHttpRequest.prototype.open;
+    var origXHRSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u) { this.__u = u; return origXHROpen.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function(b) {
+      if (this.__u && String(this.__u).indexOf('/api/biz/pay/batch-preview') !== -1) {
+        this.addEventListener('load', function() {
+          try {
+            var d = JSON.parse(this.responseText);
+            console.log('[early] XHR intercepted batch-preview, code=' + (d&&d.code));
+            cacheBatchPreview(d);
+          } catch(e) { console.log('[early] XHR parse error:', e.message); }
+        });
+      }
+      return origXHRSend.apply(this, arguments);
+    };
   } catch (e) {}
 })();

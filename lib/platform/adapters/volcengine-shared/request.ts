@@ -109,14 +109,25 @@ function xhrRequestImpl<T>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
   });
 }
 
+// ── MAIN world fetch override ───────────────────────────────────────────
+type MainWorldFetcher = (opts: XhrRequestOptions) => Promise<XhrResponse>;
+
+let _mwFetch: MainWorldFetcher | null = null;
+
+export function setMainWorldFetcher(fn: MainWorldFetcher | null) {
+  _mwFetch = fn;
+}
+
 /**
  * Perform an authenticated Volcengine platform API request.
  *
- * In the extension runtime we proxy the request through the service worker
- * (clean fetch, no page-Sentry instrumentation, no WAF 405). Outside the
- * extension context (tests) we fall back to XHR.
+ * When a MAIN world fetcher is configured, requests are routed through the
+ * page's native fetch to avoid extension-origin WAF blocks.
  */
 export function xhrRequest<T = unknown>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
+  if (_mwFetch) {
+    return _mwFetch(opts) as Promise<XhrResponse<T>>;
+  }
   if (isExtensionContext()) {
     return sendBackgroundRequest<T>(opts);
   }

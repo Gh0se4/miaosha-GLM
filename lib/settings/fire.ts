@@ -9,14 +9,14 @@ export interface FireConfig {
 
 export const FIRE_CONFIG_DEFAULT: FireConfig = {
   payType: 'ALI',
-  burstIntervalMs: 2100,
+  burstIntervalMs: 3200,
 };
 
 const STORAGE_KEY = 'local:fireConfig';
 
 function clampInterval(value: number, fallback: number): number {
   const n = Math.round(value);
-  if (!Number.isFinite(n) || n < 50) return fallback;
+  if (!Number.isFinite(n) || n < 1500) return fallback;
   return n;
 }
 

@@ -143,7 +143,7 @@ function syncSelectionStatus() {
 function restoreSelectedProducts() {
   var saved = null;
   try {
-    saved = JSON.parse(sessionStorage.getItem('bm_priority_v2') || 'null');
+    saved = JSON.parse(sessionStorage.getItem(_NS + SK_PR) || 'null');
   } catch(e) {
     saved = null;
   }
@@ -158,12 +158,12 @@ function restoreSelectedProducts() {
     }
   }
 
-  // Default target: yearly Pro plan when nothing is selected.
+  // Default target: monthly Max plan when nothing is selected.
   if (_priorityList.length === 0) {
-    var yearly = _productMatrix.yearly || [];
-    for (var j = 0; j < yearly.length; j++) {
-      if (yearly[j].name === 'Pro') {
-        _priorityList.push({ productId: yearly[j].id });
+    var monthly = _productMatrix.monthly || [];
+    for (var j = 0; j < monthly.length; j++) {
+      if (monthly[j].name === 'Max') {
+        _priorityList.push({ productId: monthly[j].id });
         break;
       }
     }
@@ -173,7 +173,7 @@ function restoreSelectedProducts() {
 function persistSelection() {
   var payload = { priorityList: _priorityList };
   try {
-    sessionStorage.setItem('bm_priority_v2', JSON.stringify(payload));
+    sessionStorage.setItem(_NS + SK_PR, JSON.stringify(payload));
   } catch(e) {}
   postMsg('PRODUCT_SELECTION_CHANGED', payload);
   return payload;
@@ -217,7 +217,7 @@ function updateProductMatrix(productList) {
 function loadBatchPreviewFromCache() {
   if (!hasLocalAuthSignals()) return;
   try {
-    var cached = JSON.parse(sessionStorage.getItem('bm_batch_preview') || 'null');
+    var cached = JSON.parse(sessionStorage.getItem(_NS + SK_BP) || 'null');
     // Only trust a fully successful cached payload. A stale 555 or error body
     // must not be allowed to seed the product matrix.
     if (cached && cached.code === 200 && cached.data && Array.isArray(cached.data.productList) && cached.data.productList.length > 0) {
@@ -266,10 +266,13 @@ function renderProductsError(reason) {
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
   if (!list) return;
+  // Check if page data is available (from fetch interceptor)
+  var hasPageData = window[_NS + "pd"] && window[_NS + "pd"].length > 0;
+  var statusText = reason + (hasPageData ? ' | 页面数据:已就绪(' + window[_NS + "pd"].length + '个)' : ' | 页面数据:等待中');
   list.innerHTML =
     '<div style="font-size:8px;text-align:center;padding:10px 6px;line-height:1.8">' +
     '<div style="color:#dc2626;font-weight:700;margin-bottom:4px">&#9888; 产品加载失败</div>' +
-    '<div style="color:#64748b;font-size:8px;margin-bottom:6px">' + (reason || 'unknown') + '</div>' +
+    '<div style="color:#64748b;font-size:8px;margin-bottom:6px">' + statusText + '</div>' +
     '<button id="_prodRetry" style="display:inline-block;padding:3px 10px;background:#6366f1;color:#fff;border-radius:4px;border:0;text-decoration:none;font-size:8px;font-weight:700;cursor:pointer">重试</button>' +
     '</div>';
   var btn = document.getElementById('_prodRetry');
@@ -308,34 +311,18 @@ var _productLoadStatus = { status: 'idle', error: '', attempt: 0 };
 var _productLoadAbortController = null;
 
 function loadProducts(force) {
-  // Once loaded, ignore automatic refresh triggers (checkRealState/setupProductUI
-  // both fire shortly after injection). Manual retry passes force=true.
   if (!force && _productLoadStatus.status === 'loaded') return;
   if (!force && _productLoadStatus.status === 'loading') return;
 
-  // Reuse data captured by the page's own fetch wrapper in bm-early.js.
-  // The page's JS already has to call /api/biz/pay/batch-preview; reusing its
-  // response lets us avoid a duplicate request that often gets rejected with
-  // WAF/rate-limit code 555 while the page's request succeeds.
-  if (!force && window.__bm_batchPreviewData && window.__bm_batchPreviewData.length > 0) {
+  // Reuse data captured by the page's own fetch wrapper (bm-early.js).
+  if (!force && window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
     _productLoadStatus.status = 'loaded';
     _productLoadStatus.error = '';
     _authFailed = false;
-    logAttempt(0, 'loaded-from-page-fetch', 'productList=' + window.__bm_batchPreviewData.length);
-    updateProductMatrix(window.__bm_batchPreviewData);
+    logAttempt(0, 'loaded-from-page-fetch', 'productList=' + window[_NS + "pd"].length);
+    updateProductMatrix(window[_NS + "pd"]);
     return;
   }
-
-  // Abort any previous in-flight fetch so stale responses cannot win a race
-  // against the fresh request we are about to start.
-  if (_productLoadAbortController) {
-    try { _productLoadAbortController.abort(); } catch(e) {}
-  }
-  var abortController = new AbortController();
-  _productLoadAbortController = abortController;
-
-  // Clear stale cache so a previous 555/session error cannot race with fresh data.
-  try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
 
   _productLoadStatus.status = 'loading';
   _productLoadStatus.error = '';
@@ -345,31 +332,27 @@ function loadProducts(force) {
   if (!auth) {
     _productLoadStatus.status = 'error';
     _productLoadStatus.error = 'auth-missing';
-    _productLoadAbortController = null;
     renderProductsAuthError();
     return;
   }
 
   if (!getVisibleProducts().length) renderProductsLoading();
 
-  var MAX_ATTEMPTS = 3;
-  // Defer retries to avoid racing with the page's own /api/biz/pay/batch-preview
-  // call. The backend often rejects duplicate calls within a short window with
-  // WAF/rate-limit code 555, while the page's own call succeeds.
-  var BACKOFF_MS = [2500, 4000, 6000];
+  // Poll for page data instead of making our own API call.
+  // The page's JS calls batch-preview naturally; we just wait.
+  // This avoids triggering the rate limit (555) that happens
+  // when both the page and the extension call batch-preview.
+  var pollStart = Date.now();
+  var MAX_POLL_MS = 30000;
+  var POLL_INTERVAL_MS = 2000;
 
   function logAttempt(attempt, outcome, detail) {
     try {
-      var entries = JSON.parse(sessionStorage.getItem('bm_product_load_log') || '[]');
+      var entries = JSON.parse(sessionStorage.getItem(_NS + SK_PL) || '[]');
       if (!Array.isArray(entries)) entries = [];
-      entries.push({
-        ts: Date.now(),
-        attempt: attempt,
-        outcome: outcome,
-        detail: detail || ''
-      });
+      entries.push({ ts: Date.now(), attempt: attempt, outcome: outcome, detail: detail || '' });
       if (entries.length > 20) entries = entries.slice(-20);
-      sessionStorage.setItem('bm_product_load_log', JSON.stringify(entries));
+      sessionStorage.setItem(_NS + SK_PL, JSON.stringify(entries));
     } catch(e) {}
   }
 
@@ -377,113 +360,80 @@ function loadProducts(force) {
     _productLoadStatus.status = 'loaded';
     _productLoadStatus.error = '';
     _productLoadStatus.attempt = 0;
-    _productLoadAbortController = null;
     _authFailed = false;
     try {
-      sessionStorage.setItem('bm_batch_preview', JSON.stringify({ code: 200, data: { productList: productList } }));
+      sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: productList } }));
     } catch(e) {}
     logAttempt(0, 'loaded', 'productList=' + productList.length);
     updateProductMatrix(productList);
   }
 
-  function renderRetryLoading(attempt, reason) {
-    var list = document.getElementById('_prodList');
-    var tag = document.getElementById('_prodTag');
-    if (!list) return;
-    list.innerHTML = '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:10px 6px;line-height:1.8"><div class="spinner" style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 6px"></div>Loading products… (attempt ' + attempt + '/' + MAX_ATTEMPTS + (reason ? ', ' + reason : '') + ')</div>';
-    if (tag) { tag.textContent = 'LOADING'; tag.className = 'tg tg-a'; }
-  }
-
-  function tryFetch(attempt) {
-    if (abortController.signal.aborted) return;
-    _productLoadStatus.attempt = attempt;
-    // Use the current window.fetch (which includes any Sentry instrumentation
-    // the page has installed) instead of the raw native fetch. The page's own
-    // batch-preview calls go through this path and succeed; bypassing it with
-    // __bm_originalFetch triggers WAF/rate-limit 555.
-    // Match the page's own request headers as closely as possible to avoid
-    // WAF/rate-limit fingerprints that distinguish extension-initiated calls.
+  function pollForPageData() {
+    if (window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
+      markLoaded(window[_NS + "pd"]);
+      return;
+    }
+    if (Date.now() - pollStart < MAX_POLL_MS) {
+      setTimeout(pollForPageData, POLL_INTERVAL_MS);
+      return;
+    }
+    // After 30s timeout, make one last-resort fetch ourselves
     var doFetch = window.fetch;
-    var authValue = auth.authorization;
-    if (authValue.indexOf('Bearer ') === 0) authValue = authValue.slice(7);
+    var authValue = (auth.authorization || '').replace(/^Bearer\s+/i, '');
     doFetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-      method: 'POST',
-      credentials: 'include',
-      signal: abortController.signal,
+      method: 'POST', credentials: 'include',
       headers: {
         'Content-Type': 'application/json;charset=UTF-8',
         'accept': 'application/json, text/plain, */*',
-        'accept-language': 'zh',
         'authorization': authValue,
         'bigmodel-organization': auth.bigmodelOrganization,
-        'bigmodel-project': auth.bigmodelProject,
-        'cache-control': 'no-cache',
-        'pragma': 'no-cache',
-        'set-language': 'zh'
+        'bigmodel-project': auth.bigmodelProject
       },
       body: '{"invitationCode":""}'
-    })
-      .then(function(r) { return r.json(); })
+    }).then(function(r) { return r.json(); })
       .then(function(d) {
-        if (abortController.signal.aborted) return;
         if (d.code === 200 && d.data && Array.isArray(d.data.productList) && d.data.productList.length > 0) {
           markLoaded(d.data.productList);
         } else if (d.code === 1001) {
           _authFailed = true;
-          _productLoadAbortController = null;
-          try { sessionStorage.removeItem('bm_batch_preview'); } catch(e) {}
-          logAttempt(attempt, 'auth', 'code=1001');
           renderProductsAuthError();
         } else {
-          logAttempt(attempt, 'server-code', 'code=' + (d.code || 'unknown'));
-          if (attempt < MAX_ATTEMPTS) {
-            renderRetryLoading(attempt + 1, 'server ' + (d.code || 'unknown'));
-            setTimeout(function() { tryFetch(attempt + 1); }, BACKOFF_MS[attempt - 1] || 1000);
-          } else if (window.__bm_batchPreviewData && window.__bm_batchPreviewData.length > 0) {
-            // Page's own fetch succeeded in the meantime; reuse it instead of failing.
-            markLoaded(window.__bm_batchPreviewData);
-          } else {
-            _productLoadAbortController = null;
-            handleBatchPreviewError('server-code-' + (d.code || 'unknown'));
-          }
+          logAttempt(1, 'last-resort-fail', 'code=' + (d.code || 'unknown'));
+          handleBatchPreviewError('server-code-' + (d.code || 'unknown'));
         }
       })
       .catch(function(err) {
-        if (abortController.signal.aborted) return;
-        logAttempt(attempt, 'catch', err && err.message ? err.message : 'network-error');
-        if (attempt < MAX_ATTEMPTS) {
-          renderRetryLoading(attempt + 1, 'network');
-          setTimeout(function() { tryFetch(attempt + 1); }, BACKOFF_MS[attempt - 1] || 1000);
-        } else if (window.__bm_batchPreviewData && window.__bm_batchPreviewData.length > 0) {
-          // Page's own fetch succeeded in the meantime; reuse it instead of failing.
-          markLoaded(window.__bm_batchPreviewData);
-        } else {
-          _productLoadAbortController = null;
-          handleBatchPreviewError(err && err.message ? err.message : 'network-error');
-        }
+        logAttempt(1, 'last-resort-err', err.message);
+        handleBatchPreviewError(err.message);
       });
   }
 
-  setTimeout(function() { tryFetch(1); }, BACKOFF_MS[0]);
+  setTimeout(pollForPageData, 2000);
 }
-
-// Kept for backward compatibility; new code should call loadProducts().
 function fetchBatchPreview() {
   loadProducts();
 }
 
-function renderProductsAuthError() {
+function renderProductsAuthError(reason) {
   _authFailed = true;
   _productLoadStatus.status = 'error';
   _productLoadStatus.error = 'auth-missing';
   var list = document.getElementById('_prodList');
   var tag = document.getElementById('_prodTag');
   if (!list) return;
+  var detail = reason || '';
+  var hasCookie, hasOrg, hasProj;
+  try {
+    hasCookie = document.cookie.indexOf('bigmodel_token_production') !== -1;
+    hasOrg = !!localStorage.getItem('Bigmodel-Organization');
+    hasProj = !!localStorage.getItem('Bigmodel-Project');
+    detail = 'Cookie:' + (hasCookie?'✓':'✗') + ' Org:' + (hasOrg?'✓':'✗') + ' Proj:' + (hasProj?'✓':'✗');
+  } catch(e) { detail = 'check error'; }
   list.innerHTML =
     '<div style="font-size:8px;text-align:center;padding:10px 6px;line-height:1.8">' +
     '<div style="color:#dc2626;font-weight:700;margin-bottom:4px">&#9888; 需要登录</div>' +
     '<button id="_prodLogin" style="display:inline-block;padding:3px 10px;background:#6366f1;color:#fff;border-radius:4px;border:0;text-decoration:none;font-size:8px;font-weight:700;cursor:pointer">登录 / 注册</button>' +
-    '<div style="color:#94a3b8;margin-top:4px;font-size:7px">登录后刷新页面即可查看可购产品</div>' +
+    '<div style="color:#94a3b8;margin-top:4px;font-size:7px">' + detail + '</div>' +
     '</div>';
   var btn = document.getElementById('_prodLogin');
   if (btn) {
@@ -586,12 +536,12 @@ function setupProductUI() {
         this.className = 'pr-bl on';
         persistSelection();
         renderProducts();
-        try { sessionStorage.setItem('bm_billing', _billing); } catch(e) {}
+        try { sessionStorage.setItem(_NS + SK_BL, _billing); } catch(e) {}
       });
     }
   }
   try {
-    var savedBilling = sessionStorage.getItem('bm_billing');
+    var savedBilling = sessionStorage.getItem(_NS + SK_BL);
     if (savedBilling) _billing = savedBilling;
     var allBtns = billEl ? billEl.querySelectorAll('.pr-bl') : [];
     for (var k = 0; k < allBtns.length; k++) {

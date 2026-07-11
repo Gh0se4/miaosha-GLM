@@ -11,7 +11,7 @@
 <div class="topbar">
   <div class="brand">
     <div class="brand-mark">Z</div>
-    <div class="brand-text">Coding Plan 秒杀助手</div>
+    <div class="brand-text">抢购助手</div>
     <span class="ver">v{version}</span>
   </div>
   <div class="pill-toggle">

@@ -110,7 +110,7 @@
       _pt_origClose = pay.closeAndRefreshFn;
       pay.closeAndRefreshFn = function () {
         if (!pay._pt_manualClose) {
-          console.log('[miaosha] Test mode: blocked auto-close of native pay dialog.');
+          console.log('[qg] Test mode: blocked auto-close of native pay dialog.');
           return;
         }
         disableTestMode(pay);
@@ -130,7 +130,7 @@
               ? _pt_origCaptchaHandlers[method].apply(this, arguments)
               : undefined;
           }
-          console.log('[miaosha] Test mode: intercepted ' + method + ', keeping dialog open.');
+          console.log('[qg] Test mode: intercepted ' + method + ', keeping dialog open.');
           // In test mode we never want the captcha result to proceed to real
           // payment or to close the dialog. Just keep the dialog visible.
           setReactive(pay, 'payDialogVisible', true);
@@ -143,7 +143,7 @@
     if (typeof pay.$watch === 'function') {
       _pt_unwatch = pay.$watch('payDialogVisible', function (newVal, oldVal) {
         if (!newVal && oldVal && pay._pt_testMode && !pay._pt_manualClose) {
-          console.log('[miaosha] Test mode: watcher detected dialog close, reopening.');
+          console.log('[qg] Test mode: watcher detected dialog close, reopening.');
           setReactive(pay, 'payDialogVisible', true);
         }
       });
@@ -255,7 +255,7 @@
     if (!ps || !ps.bizId) return false;
     var pay = findPayComponent();
     if (!pay) {
-      console.warn('[miaosha] PayComponent not found in Vue tree — bigmodel.cn may have restructured.');
+      console.warn('[qg] PayComponent not found in Vue tree — bigmodel.cn may have restructured.');
       return false;
     }
     try {
@@ -274,8 +274,8 @@
       var setVerified = function () {
         try {
           setReactive(pay, 'captchaVerified', true);
-          setReactive(pay, 'captchaTicket', pay.$data.captchaTicket || 'miaosha-bypass');
-          setReactive(pay, 'captchaRandstr', pay.$data.captchaRandstr || 'miaosha-bypass');
+          setReactive(pay, 'captchaTicket', pay.$data.captchaTicket || 'qg-bypass');
+          setReactive(pay, 'captchaRandstr', pay.$data.captchaRandstr || 'qg-bypass');
           if (typeof pay.$forceUpdate === 'function') pay.$forceUpdate();
         } catch (e) { /* ignore */ }
       };
@@ -286,13 +286,13 @@
       }
       return true;
     } catch (e) {
-      console.warn('[miaosha] Failed to open native PayComponent dialog:', e);
+      console.warn('[qg] Failed to open native PayComponent dialog:', e);
       return false;
     }
   }
 
   window.addEventListener('message', function (e) {
-    if (!e.data || e.data.__miaosha_overlay !== true) return;
+    if (!e.data || e.data[MSG_OVL] !== true) return;
     var msg = e.data;
     if (msg.type !== 'BURST_FIRE_SUCCESS') return;
     var ps = msg.data;
@@ -302,7 +302,7 @@
 
   // Listen for the explicit test command from the L1 header button.
   window.addEventListener('message', function (e) {
-    if (!e.data || e.data.__miaosha_cmd !== true) return;
+    if (!e.data || e.data[MSG_CMD] !== true) return;
     if (e.data.type !== 'TEST_NATIVE_PAYMENT') return;
     var data = e.data.data || {};
     openNativePaymentDialog({

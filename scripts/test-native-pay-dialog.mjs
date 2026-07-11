@@ -20,7 +20,7 @@
 
 const snippet = `(function() {
   if (!window.__bmPaymentIntercept) {
-    console.warn('[miaosha-test] bm-main.js does not seem to be loaded. Make sure the extension is injected on bigmodel.cn/glm-coding.');
+    console.warn('[qg-test] bm-main.js does not seem to be loaded. Make sure the extension is injected on bigmodel.cn/glm-coding.');
     return;
   }
   window.postMessage({
@@ -28,7 +28,7 @@ const snippet = `(function() {
     type: 'TEST_NATIVE_PAYMENT',
     data: { payType: 'ALI', amount: 159 }
   }, window.location.origin);
-  console.log('[miaosha-test] Dispatched TEST_NATIVE_PAYMENT. The native payment dialog should open in test mode.');
+  console.log('[qg-test] Dispatched TEST_NATIVE_PAYMENT. The native payment dialog should open in test mode.');
 })();`;
 
 console.log('\n=== 智谱秒杀助手 — 原生支付弹窗手动测试 ===\n');

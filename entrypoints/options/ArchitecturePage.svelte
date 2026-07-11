@@ -6,7 +6,7 @@
     { id: 'R3', feature: 'bigmodel.cn 标签页内视觉 + 音频提醒', carrier: 'bm-capture', color: '#06b6d4' },
     { id: 'R4', feature: '扩展图标角标倒计时', carrier: 'Background SW', color: '#f59e0b' },
     { id: 'DEV', feature: 'API 调试面板（直接调用 bigmodel API）', carrier: 'Popup DEV', color: '#10b981' },
-    { id: 'PROD', feature: '秒杀操作面板（一键开火、支付轮询）', carrier: 'Popup PROD', color: '#ef4444' },
+    { id: 'PROD', feature: '抢购操作面板（一键开火、支付轮询）', carrier: 'Popup PROD', color: '#ef4444' },
   ];
 
   /* ── §03 Entrypoints ── */
@@ -56,7 +56,7 @@
 
   /* ── §08 bm-main ── */
   const CAPABILITIES = ['拦截 XMLHttpRequest（prototype 覆盖）', '访问页面 JS 运行时与全局状态', '读写 document.cookie 与 localStorage', 'window.postMessage → ISOLATED world'];
-  const BM_MAINFUNCS = ['捕获 batch-preview 商品列表', '捕获 Tencent CAPTCHA ticket', '渲染秒杀覆盖层 UI', '覆盖层事件 → bm-capture'];
+  const BM_MAINFUNCS = ['捕获 batch-preview 商品列表', '捕获 Tencent CAPTCHA ticket', '渲染抢购覆盖层 UI', '覆盖层事件 → bm-capture'];
 
   /* ── §09 决策 ── */
   const DECISIONS = [
@@ -93,7 +93,7 @@
       <!-- ═══ HERO ═══ -->
       <div class="hero">
         <span class="badge">ARCHITECTURE</span>
-        <h4>智谱秒杀助手 — 代码库架构与基本原理</h4>
+        <h4>抢购助手 — 代码库架构与基本原理</h4>
         <p>构建工具 WXT 0.20.26 · Vite · TypeScript · Svelte 5 · Chrome MV3</p>
         <div class="pills">
           <span class="pill">WXT 0.20.26</span>

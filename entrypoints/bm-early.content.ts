@@ -7,7 +7,7 @@
 // This is loaded as an external file (not inline) because bigmodel.cn's CSP
 // forbids inline scripts.
 export default defineContentScript({
-  matches: ['*://*.bigmodel.cn/*'],
+  matches: ['*://bigmodel.cn/*', '*://*.bigmodel.cn/*'],
   runAt: 'document_start',
 
   main() {

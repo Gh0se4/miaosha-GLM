@@ -54,22 +54,22 @@ function _fv_productName(productId) {
 
 function _fv_buildCSS() {
   return [
-    '<style id="__bm_fv_css">',
+    '<style id="' + _NS + 'fc' + '">',
     '@keyframes fvFlicker{0%,100%{opacity:1}50%{opacity:.65}}',
     '@keyframes fvBlink{0%,100%{opacity:1}50%{opacity:0}}',
     '@keyframes fvPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.45)}100%{box-shadow:0 0 0 8px rgba(16,185,129,0)}}',
-    '#__bm_fv *{box-sizing:border-box}',
-    '#__bm_fv ::-webkit-scrollbar{width:4px}',
-    '#__bm_fv ::-webkit-scrollbar-thumb{background:rgba(99,102,241,.25);border-radius:99px}',
-    '#__bm_fv .fv-row:hover{background:rgba(99,102,241,.05)}',
-    '#__bm_fv .fv-dot.pending{background:#e2e8f0;border-color:#e2e8f0}',
-    '#__bm_fv .fv-stat:hover{background:rgba(255,255,255,.6)}',
-    '#__bm_fv_chain{border-top:1px solid #f1f5f9}',
-    '#__bm_fv_chain_h{padding:6px 14px;font-size:9px;font-weight:700;color:#6366f1;cursor:pointer;display:flex;align-items:center;gap:6px;background:rgba(99,102,241,.03)}',
-    '#__bm_fv_chain_ht{font-size:9px;font-weight:800;color:#1e293b;margin-left:4px}',
-    '#__bm_fv_chain_b{padding:8px 14px 10px;display:none;max-height:110px;overflow-y:auto}',
-    '#__bm_fv_chain.open #__bm_fv_chain_b{display:block}',
-    '#__bm_fv_chain.open #__bm_fv_chain_h .fv-ch-chev{transform:rotate(90deg)}',
+    '#' + _NS + 'fv *{box-sizing:border-box}',
+    '#' + _NS + 'fv ::-webkit-scrollbar{width:4px}',
+    '#' + _NS + 'fv ::-webkit-scrollbar-thumb{background:rgba(99,102,241,.25);border-radius:99px}',
+    '#' + _NS + 'fv .fv-row:hover{background:rgba(99,102,241,.05)}',
+    '#' + _NS + 'fv .fv-dot.pending{background:#e2e8f0;border-color:#e2e8f0}',
+    '#' + _NS + 'fv .fv-stat:hover{background:rgba(255,255,255,.6)}',
+    '#' + _NS + 'fv_chain{border-top:1px solid #f1f5f9}',
+    '#' + _NS + 'fv_chain_h{padding:6px 14px;font-size:9px;font-weight:700;color:#6366f1;cursor:pointer;display:flex;align-items:center;gap:6px;background:rgba(99,102,241,.03)}',
+    '#' + _NS + 'fv_chain_ht{font-size:9px;font-weight:800;color:#1e293b;margin-left:4px}',
+    '#' + _NS + 'fv_chain_b{padding:8px 14px 10px;display:none;max-height:110px;overflow-y:auto}',
+    '#' + _NS + 'fv_chain.open #' + _NS + 'fv_chain_b{display:block}',
+    '#' + _NS + 'fv_chain.open #' + _NS + 'fv_chain_h .fv-ch-chev{transform:rotate(90deg)}',
     '.fv-ch-flow{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:8px}',
     '.fv-ch-step{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:54px;max-width:64px}',
     '.fv-ch-num{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:8px;font-weight:800;color:#fff;background:#94a3b8}',
@@ -87,14 +87,14 @@ function _fv_buildCSS() {
     '.fv-ch-legend{margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;font-size:8px;color:#64748b;line-height:1.5}',
     '.fv-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}',
     '@media (prefers-color-scheme:dark){',
-    '#__bm_fv{background:rgba(15,23,42,.92)!important;border-color:rgba(71,85,105,.72)!important}',
-    '#__bm_fv_h{background:rgba(99,102,241,.08)!important;border-bottom-color:rgba(71,85,105,.72)!important}',
-    '#__bm_fv_meta,#__bm_fv_st{color:#94a3b8!important}',
-    '#__bm_fv_log,#__bm_fv_timeline,#__bm_fv .fv-stat-wrap{background:rgba(2,6,23,.55)!important;border-color:rgba(71,85,105,.55)!important}',
-    '#__bm_fv .fv-row{background:rgba(255,255,255,.03)!important}',
-    '#__bm_fv_chain_h{color:#a5b4fc!important;background:rgba(99,102,241,.08)!important}',
-    '#__bm_fv_chain_ht{color:#f8fafc!important}',
-    '#__bm_fv_chain_b{background:rgba(2,6,23,.45)!important}',
+    '#' + _NS + 'fv{background:rgba(15,23,42,.92)!important;border-color:rgba(71,85,105,.72)!important}',
+    '#' + _NS + 'fv_h{background:rgba(99,102,241,.08)!important;border-bottom-color:rgba(71,85,105,.72)!important}',
+    '#' + _NS + 'fv_meta,#' + _NS + 'fv_st{color:#94a3b8!important}',
+    '#' + _NS + 'fv_log,#' + _NS + 'fv_tl,#' + _NS + 'fv .fv-stat-wrap{background:rgba(2,6,23,.55)!important;border-color:rgba(71,85,105,.55)!important}',
+    '#' + _NS + 'fv .fv-row{background:rgba(255,255,255,.03)!important}',
+    '#' + _NS + 'fv_chain_h{color:#a5b4fc!important;background:rgba(99,102,241,.08)!important}',
+    '#' + _NS + 'fv_chain_ht{color:#f8fafc!important}',
+    '#' + _NS + 'fv_chain_b{background:rgba(2,6,23,.45)!important}',
     '.fv-ch-name{color:#cbd5e1!important}',
     '.fv-ch-arrow{color:#475569!important}',
     '.fv-ch-legend{color:#94a3b8!important;border-color:rgba(71,85,105,.55)!important}',
@@ -106,7 +106,7 @@ function _fv_buildCSS() {
 
 function _fv_buildHTML() {
   return _fv_buildCSS() + [
-    '<div id="__bm_fv" style="',
+    '<div id="' + _NS + 'fv" style="',
       'position:fixed;right:20px;bottom:20px;',
       'z-index:2147483646;width:420px;max-height:calc(100vh - 40px);',
       'background:rgba(255,255,255,.97);',
@@ -119,7 +119,7 @@ function _fv_buildHTML() {
     '>',
 
     // Header
-    '<div id="__bm_fv_h" style="',
+    '<div id="' + _NS + 'fv_h" style="',
       'background:rgba(99,102,241,.06);',
       'padding:10px 14px;cursor:move;',
       'display:flex;align-items:center;gap:8px;',
@@ -127,10 +127,10 @@ function _fv_buildHTML() {
     '>',
     '<span style="font-size:15px;display:inline-block;animation:fvFlicker .5s ease-in-out infinite alternate">🔥</span>',
     '<span style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:.1em;text-transform:uppercase;flex:1">Fire Matrix</span>',
-    '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.4.2</span>',
-    '<span id="__bm_fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
-    '<span id="__bm_fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
-    '<button id="__bm_fv_cls" style="',
+    '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.4.3</span>',
+    '<span id="' + _NS + 'fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
+    '<span id="' + _NS + 'fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
+    '<button id="' + _NS + 'fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
       'border:1px solid #e2e8f0;',
       'background:#f8fafc;color:#64748b;',
@@ -140,21 +140,21 @@ function _fv_buildHTML() {
 
     // Progress bar
     '<div style="height:3px;background:#e2e8f0">',
-    '<div id="__bm_fv_pb" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#10b981);transition:width .3s"></div>',
+    '<div id="' + _NS + 'fv_pb" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#10b981);transition:width .3s"></div>',
     '</div>',
 
     // Meta strip
-    '<div id="__bm_fv_meta" style="padding:8px 14px;font-size:9px;color:#475569;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f1f5f9">',
+    '<div id="' + _NS + 'fv_meta" style="padding:8px 14px;font-size:9px;color:#475569;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f1f5f9">',
     '等待任务开始…',
     '</div>',
 
     // Dot strip
     '<div style="padding:10px 14px 6px">',
-    '<div id="__bm_fv_dots" style="display:flex;flex-wrap:wrap;gap:3px;max-height:54px;overflow-y:auto"></div>',
+    '<div id="' + _NS + 'fv_dots" style="display:flex;flex-wrap:wrap;gap:3px;max-height:54px;overflow-y:auto"></div>',
     '</div>',
 
     // Timeline
-    '<div id="__bm_fv_timeline" style="padding:0 14px 8px;height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">',
+    '<div id="' + _NS + 'fv_tl" style="padding:0 14px 8px;height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">',
     '</div>',
 
     // Stats strip
@@ -163,25 +163,25 @@ function _fv_buildHTML() {
       'border-radius:10px;border:1px solid #e2e8f0;',
       'display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between"',
     '>',
-    '<div class="fv-stat" id="__bm_fv_ss" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#059669;transition:background .15s">',
+    '<div class="fv-stat" id="' + _NS + 'fv_ss" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#059669;transition:background .15s">',
       '<span>✓</span><span>成功</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
-    '<div class="fv-stat" id="__bm_fv_sb" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#d97706;transition:background .15s">',
+    '<div class="fv-stat" id="' + _NS + 'fv_sb" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#d97706;transition:background .15s">',
       '<span>⚠</span><span>限流</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
-    '<div class="fv-stat" id="__bm_fv_se" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#dc2626;transition:background .15s">',
+    '<div class="fv-stat" id="' + _NS + 'fv_se" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#dc2626;transition:background .15s">',
       '<span>✗</span><span>错误</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
-    '<div class="fv-stat" id="__bm_fv_sd" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#64748b;transition:background .15s">',
+    '<div class="fv-stat" id="' + _NS + 'fv_sd" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#64748b;transition:background .15s">',
       '<span>⊘</span><span>售罄</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
-    '<div class="fv-stat" id="__bm_fv_sc" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#7c3aed;transition:background .15s">',
+    '<div class="fv-stat" id="' + _NS + 'fv_sc" style="display:flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:999px;background:#fff;border:1px solid #e2e8f0;color:#7c3aed;transition:background .15s">',
       '<span>☁</span><span>验证码</span><b style="min-width:14px;text-align:center">0</b>',
     '</div>',
     '<div class="fv-warn" style="display:flex;align-items:center;gap:4px;font-size:9px;padding:3px 8px;border-radius:999px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;white-space:nowrap">',
       '<span>⚠</span><span>10:00 智谱→→腾讯验证码QPS超限→→ 500</span>',
     '</div>',
-    '<span id="__bm_fv_st" style="font-size:9px;color:#94a3b8;margin-left:auto">0ms</span>',
+    '<span id="' + _NS + 'fv_st" style="font-size:9px;color:#94a3b8;margin-left:auto">0ms</span>',
     '</div>',
 
     // Console
@@ -189,33 +189,33 @@ function _fv_buildHTML() {
     '<div style="display:flex;align-items:center;padding:8px 14px 4px;gap:6px">',
     '<span style="font-size:9px;color:#6366f1;font-weight:700;letter-spacing:.06em">▸ FIRE CONSOLE</span>',
     '<span style="flex:1"></span>',
-    '<button id="__bm_fv_cpy" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">COPY</button>',
-    '<button id="__bm_fv_dwn" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">DOWN</button>',
-    '<button id="__bm_fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">JSON</button>',
-    '<button id="__bm_fv_asc" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">AUTO ↓</button>',
-    '<button id="__bm_fv_clr" style="font-size:8px;color:#64748b;border:1px solid #e2e8f0;background:#f8fafc;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">CLR</button>',
+    '<button id="' + _NS + 'fv_cpy" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">COPY</button>',
+    '<button id="' + _NS + 'fv_dwn" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">DOWN</button>',
+    '<button id="' + _NS + 'fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">JSON</button>',
+    '<button id="' + _NS + 'fv_asc" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">AUTO ↓</button>',
+    '<button id="' + _NS + 'fv_clr" style="font-size:8px;color:#64748b;border:1px solid #e2e8f0;background:#f8fafc;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">CLR</button>',
     '</div>',
-    '<div id="__bm_fv_log" style="',
+    '<div id="' + _NS + 'fv_log" style="',
       'height:120px;overflow-y:auto;',
       'font-size:10px;line-height:1.6;',
       'background:#f8fafc;padding:6px 8px;',
       'margin:0 14px 12px;border-radius:8px;',
       'border:1px solid #e2e8f0;color:#334155"',
     '>',
-    '<span id="__bm_fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>',
+    '<span id="' + _NS + 'fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>',
     '</div>',
     '</div>',
 
     // Call Chain
-    '<div id="__bm_fv_chain">',
-    '<div id="__bm_fv_chain_h">',
+    '<div id="' + _NS + 'fv_chain">',
+    '<div id="' + _NS + 'fv_chain_h">',
       '<span class="fv-ch-chev" style="font-size:9px;transition:transform .15s">▸</span>',
       '<span>CALL CHAIN /pay/preview</span>',
-      '<span id="__bm_fv_chain_ht">智谱内部订单生成API内部调用链路</span>',
+      '<span id="' + _NS + 'fv_chain_ht">智谱内部订单生成API内部调用链路</span>',
       '<span style="flex:1"></span>',
       '<span style="font-size:8px;color:#94a3b8;font-weight:500">点击展开</span>',
     '</div>',
-    '<div id="__bm_fv_chain_b">',
+    '<div id="' + _NS + 'fv_chain_b">',
       '<div class="fv-ch-flow">',
         '<div class="fv-ch-step"><span class="fv-ch-num">1</span><span class="fv-ch-name">智谱用户认证Auth</span><span class="fv-ch-tags"><span class="fv-ch-tag e401">401</span></span></div>',
         '<span class="fv-ch-arrow">→</span>',
@@ -238,7 +238,7 @@ function _fv_buildHTML() {
 }
 
 function _fv_show(data) {
-  var existing = document.getElementById('__bm_fv');
+  var existing = document.getElementById(_NS + 'fv');
   var isAppend = !!existing;
 
   if (!existing) {
@@ -246,8 +246,8 @@ function _fv_show(data) {
     tmp.innerHTML = _fv_buildHTML();
     while (tmp.firstChild) document.body.appendChild(tmp.firstChild);
 
-    _fv_logEl   = document.getElementById('__bm_fv_log');
-    _fv_cursor  = document.getElementById('__bm_fv_cur');
+    _fv_logEl   = document.getElementById(_NS + 'fv_log');
+    _fv_cursor  = document.getElementById(_NS + 'fv_cur');
     _fv_lineNo  = 0;
     _fv_logLines = [];
     _fv_shotsData = [];
@@ -266,7 +266,7 @@ function _fv_show(data) {
     _fv_bindEvents();
   }
 
-  var chainWrap = document.getElementById('__bm_fv_chain');
+  var chainWrap = document.getElementById(_NS + 'fv_chain');
   if (chainWrap) chainWrap.classList.remove('open');
 
   var waveShots = (data && data.totalShots) || 0;
@@ -292,17 +292,17 @@ function _fv_show(data) {
 }
 
 function _fv_updateWaveBadge() {
-  var badge = document.getElementById('__bm_fv_wave');
+  var badge = document.getElementById(_NS + 'fv_wave');
   if (badge) badge.textContent = 'Wave ' + _fv_waveCount;
 }
 
 function _fv_renderDots(startIdx, count) {
-  var wrap = document.getElementById('__bm_fv_dots');
+  var wrap = document.getElementById(_NS + 'fv_dots');
   if (!wrap) return;
   for (var i = 0; i < count; i++) {
     var globalIdx = startIdx + i;
     var d = document.createElement('div');
-    d.id = '__bm_fv_d_' + globalIdx;
+    d.id = _NS + 'fv_d_' + globalIdx;
     d.className = 'fv-dot pending';
     d.style.cssText = 'width:10px;height:10px;border-radius:2px;border:1px solid #e2e8f0;background:#e2e8f0;transition:all .25s';
     d.title = '#' + (globalIdx + 1) + ' 待发射';
@@ -327,7 +327,7 @@ function _fv_updateDot(shotIdx, outcome) {
 }
 
 function _fv_updateMeta() {
-  var el = document.getElementById('__bm_fv_meta');
+  var el = document.getElementById(_NS + 'fv_meta');
   if (!el || !_fv_meta) return;
   var mode = _fv_meta.mode === 'manual' ? 'MANUAL' : (_fv_meta.mode === 'burst' ? 'BURST' : 'AUTO');
   var interval = (_fv_meta.burstIntervalMs || 2100) + 'ms';
@@ -341,9 +341,9 @@ function _fv_updateMeta() {
 }
 
 function _fv_updateProgress() {
-  var cnt = document.getElementById('__bm_fv_cnt');
+  var cnt = document.getElementById(_NS + 'fv_cnt');
   if (cnt) cnt.textContent = _fv_done + '/' + _fv_total + ' shots';
-  var pb = document.getElementById('__bm_fv_pb');
+  var pb = document.getElementById(_NS + 'fv_pb');
   if (pb && _fv_total > 0) pb.style.width = Math.round(_fv_done / _fv_total * 100) + '%';
 }
 
@@ -358,7 +358,7 @@ function _fv_userResultText(outcome, code, serverMsg) {
 }
 
 function _fv_addTimelineRow(d) {
-  var wrap = document.getElementById('__bm_fv_timeline');
+  var wrap = document.getElementById(_NS + 'fv_tl');
   if (!wrap) return;
 
   var idx = d.shotIdx;
@@ -369,7 +369,7 @@ function _fv_addTimelineRow(d) {
   var resultText = _fv_userResultText(d.outcome, d.code, d.serverMsg);
 
   var row = document.createElement('div');
-  row.id = '__bm_fv_r_' + idx;
+  row.id = _NS + 'fv_r_' + idx;
   row.className = 'fv-row';
   row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,.5);font-size:10px;transition:background .15s';
   row.innerHTML =
@@ -403,22 +403,22 @@ function _fv_addTimelineRow(d) {
 }
 
 function _fv_updateStats() {
-  var ss = document.getElementById('__bm_fv_ss');
+  var ss = document.getElementById(_NS + 'fv_ss');
   if (ss) ss.querySelector('b').textContent = String(_fv_counts.success);
-  var sb = document.getElementById('__bm_fv_sb');
+  var sb = document.getElementById(_NS + 'fv_sb');
   if (sb) sb.querySelector('b').textContent = String(_fv_counts.busy);
-  var se = document.getElementById('__bm_fv_se');
+  var se = document.getElementById(_NS + 'fv_se');
   if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
-  var sd = document.getElementById('__bm_fv_sd');
+  var sd = document.getElementById(_NS + 'fv_sd');
   if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
-  var sc = document.getElementById('__bm_fv_sc');
+  var sc = document.getElementById(_NS + 'fv_sc');
   if (sc) sc.querySelector('b').textContent = String(_fv_counts.captchaService + _fv_counts.captchaInvalid + _fv_counts.captchaRisk);
-  var st = document.getElementById('__bm_fv_st');
+  var st = document.getElementById(_NS + 'fv_st');
   if (st) st.textContent = (Date.now() - _fv_startMs) + 'ms';
 }
 
 function _fv_addLine(text, color) {
-  var lg = document.getElementById('__bm_fv_log');
+  var lg = document.getElementById(_NS + 'fv_log');
   if (!lg) return;
   _fv_lineNo++;
   var ts = _fv_formatTs(new Date());
@@ -431,7 +431,7 @@ function _fv_addLine(text, color) {
     '<span style="color:#cbd5e1;font-size:9px;min-width:18px;text-align:right;flex-shrink:0">' + _fv_lineNo + '</span>' +
     '<span style="color:#94a3b8;font-size:9px;flex-shrink:0">[' + ts + ']</span>' +
     '<span style="color:' + (color || '#475569') + ';word-break:break-all">' + _fv_escHtml(text) + '</span>';
-  var cur = document.getElementById('__bm_fv_cur');
+  var cur = document.getElementById(_NS + 'fv_cur');
   if (cur && cur.parentNode === lg) {
     lg.insertBefore(row, cur);
   } else {
@@ -474,15 +474,11 @@ function _fv_downloadLog() {
 }
 
 function _fv_downloadJson() {
+  // Use comprehensive fire log if available (12-fire-log.js)
+  if (window.__fireLogDownload) { window.__fireLogDownload(); return; }
+  // Fallback: basic Fire Matrix data
   var payload = {
-    meta: {
-      exportedAt: Date.now(),
-      mode: _fv_meta.mode || 'unknown',
-      burstIntervalMs: _fv_meta.burstIntervalMs || 0,
-      totalShots: _fv_total,
-      startMs: _fv_meta.startMs || _fv_startMs,
-      elapsedMs: Date.now() - _fv_startMs
-    },
+    meta: { exportedAt: Date.now(), mode: _fv_meta.mode || 'unknown', burstIntervalMs: _fv_meta.burstIntervalMs || 0, totalShots: _fv_total, startMs: _fv_meta.startMs || _fv_startMs, elapsedMs: Date.now() - _fv_startMs },
     counts: _fv_counts,
     shots: _fv_shotsData,
     logs: _fv_logLines
@@ -494,17 +490,14 @@ function _fv_downloadJson() {
   a.download = 'fire-matrix-data-' + Date.now() + '.json';
   document.body.appendChild(a);
   a.click();
-  setTimeout(function() {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 0);
+  setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
 }
 
 function _fv_clearLog() {
-  var lg = document.getElementById('__bm_fv_log');
+  var lg = document.getElementById(_NS + 'fv_log');
   if (lg) {
-    lg.innerHTML = '<span id="__bm_fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>';
-    _fv_cursor = document.getElementById('__bm_fv_cur');
+    lg.innerHTML = '<span id="' + _NS + 'fv_cur" style="color:#6366f1;animation:fvBlink 1s step-end infinite">█</span>';
+    _fv_cursor = document.getElementById(_NS + 'fv_cur');
     _fv_lineNo = 0;
     _fv_logLines = [];
     _fv_shotsData = [];
@@ -512,24 +505,24 @@ function _fv_clearLog() {
 }
 
 function _fv_bindEvents() {
-  var cls = document.getElementById('__bm_fv_cls');
+  var cls = document.getElementById(_NS + 'fv_cls');
   if (cls) cls.addEventListener('click', function() {
-    var ov = document.getElementById('__bm_fv');
+    var ov = document.getElementById(_NS + 'fv');
     if (ov) ov.parentNode && ov.parentNode.removeChild(ov);
-    var css = document.getElementById('__bm_fv_css');
+    var css = document.getElementById(_NS + 'fc');
     if (css) css.parentNode && css.parentNode.removeChild(css);
   });
 
-  var cpy = document.getElementById('__bm_fv_cpy');
+  var cpy = document.getElementById(_NS + 'fv_cpy');
   if (cpy) cpy.addEventListener('click', _fv_copyLog);
 
-  var dwn = document.getElementById('__bm_fv_dwn');
+  var dwn = document.getElementById(_NS + 'fv_dwn');
   if (dwn) dwn.addEventListener('click', _fv_downloadLog);
 
-  var json = document.getElementById('__bm_fv_json');
-  if (json) json.addEventListener('click', _fv_downloadJson);
+  var json = document.getElementById(_NS + 'fv_json');
+  if (json) { json.addEventListener("click", function() { if (window.__fireLogDownload) { window.__fireLogDownload(); return; } _fv_downloadJson(); }); }
 
-  var asc = document.getElementById('__bm_fv_asc');
+  var asc = document.getElementById(_NS + 'fv_asc');
   if (asc) asc.addEventListener('click', function() {
     _fv_autoScr = !_fv_autoScr;
     asc.style.color       = _fv_autoScr ? '#6366f1' : '#64748b';
@@ -537,19 +530,19 @@ function _fv_bindEvents() {
     asc.style.background  = _fv_autoScr ? 'rgba(99,102,241,.06)' : '#f8fafc';
   });
 
-  var clr = document.getElementById('__bm_fv_clr');
+  var clr = document.getElementById(_NS + 'fv_clr');
   if (clr) clr.addEventListener('click', _fv_clearLog);
 
-  var chainHead = document.getElementById('__bm_fv_chain_h');
-  var chainWrap = document.getElementById('__bm_fv_chain');
+  var chainHead = document.getElementById(_NS + 'fv_chain_h');
+  var chainWrap = document.getElementById(_NS + 'fv_chain');
   if (chainHead && chainWrap) {
     chainHead.addEventListener('click', function() {
       chainWrap.classList.toggle('open');
     });
   }
 
-  var hd = document.getElementById('__bm_fv_h');
-  var ov = document.getElementById('__bm_fv');
+  var hd = document.getElementById(_NS + 'fv_h');
+  var ov = document.getElementById(_NS + 'fv');
   if (hd && ov) {
     var ox = 0, oy = 0, left = 0, top = 0, dragging = false;
     hd.addEventListener('mousedown', function(e) {
@@ -566,7 +559,7 @@ function _fv_bindEvents() {
     });
     document.addEventListener('mousemove', function(e) {
       if (!dragging) return;
-      var o = document.getElementById('__bm_fv');
+      var o = document.getElementById(_NS + 'fv');
       if (!o) { dragging = false; return; }
       o.style.left = (left + e.clientX - ox) + 'px';
       o.style.top  = (top  + e.clientY - oy) + 'px';
@@ -576,7 +569,7 @@ function _fv_bindEvents() {
 }
 
 window.addEventListener('message', function(e) {
-  if (!e.data || !e.data.__miaosha_overlay) return;
+  if (!e.data || !e.data[MSG_OVL]) return;
   var d = e.data;
 
   if (d.type === 'FIRE_BATCH_START') {
@@ -584,7 +577,7 @@ window.addEventListener('message', function(e) {
     return;
   }
 
-  if (!document.getElementById('__bm_fv')) return;
+  if (!document.getElementById(_NS + 'fv')) return;
 
   if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
     var outcome = d.data.outcome || 'error';
@@ -618,7 +611,7 @@ window.addEventListener('message', function(e) {
   if (d.type === 'BURST_FIRE_SUCCESS' && d.data) {
     var biz = d.data.bizId ? String(d.data.bizId).slice(-8) : '?';
     _fv_addLine('✔ ORDER SUCCESS · native pay dialog opened · bizId=' + biz, '#059669');
-    var cur1 = document.getElementById('__bm_fv_cur');
+    var cur1 = document.getElementById(_NS + 'fv_cur');
     if (cur1) { cur1.style.color = '#059669'; cur1.style.animation = ''; }
     return;
   }
@@ -644,14 +637,14 @@ window.addEventListener('message', function(e) {
   if (d.type === 'BURST_FIRE_DEPLETED') {
     var tot = (d.data && d.data.total) || 0;
     _fv_addLine('⊘ Depleted — ' + tot + ' shots, no order', '#dc2626');
-    var cur2 = document.getElementById('__bm_fv_cur');
+    var cur2 = document.getElementById(_NS + 'fv_cur');
     if (cur2) { cur2.style.color = '#64748b'; cur2.style.animation = ''; }
     return;
   }
 
   if (d.type === 'PREFIRE_STATUS' && d.data && !d.data.ok) {
     _fv_addLine('⊘ Prefire blocked: ' + (d.data.reason || 'unknown'), '#dc2626');
-    var cur3 = document.getElementById('__bm_fv_cur');
+    var cur3 = document.getElementById(_NS + 'fv_cur');
     if (cur3) { cur3.style.color = '#dc2626'; cur3.style.animation = ''; }
   }
 });

@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Referer", "operation": "set", "value": "https://bigmodel.cn/glm-coding" },
+        { "header": "Origin", "operation": "set", "value": "https://bigmodel.cn" },
+        { "header": "sec-ch-ua", "operation": "set", "value": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not?A_Brand\";v=\"24\"" },
+        { "header": "sec-ch-ua-mobile", "operation": "set", "value": "?0" },
+        { "header": "sec-ch-ua-platform", "operation": "set", "value": "\"macOS\"" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "bigmodel.cn/api/*",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]

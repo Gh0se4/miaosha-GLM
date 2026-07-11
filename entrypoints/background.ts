@@ -32,7 +32,7 @@ async function showFlashNotification(min: number) {
     : min <= 5
       ? '距秒杀开始还有 5 分钟！请尽快录入验证码，越多越好。'
       : `距秒杀开始还有 ${min} 分钟！`;
-  const title = min <= 5 ? '🔥 智谱秒杀提醒 · 验证码冲刺' : '🔥 智谱秒杀提醒';
+  const title = min <= 5 ? '🔥 抢购提醒 · 验证码冲刺' : '🔥 抢购提醒';
 
   try {
     await chrome.notifications.create(`flash-${min}`, {
@@ -375,6 +375,16 @@ export default defineBackground(() => {
     if (msg.type === 'OPEN_OPTIONS_PAGE') {
       chrome.runtime.openOptionsPage();
       sendResponse({ ok: true });
+      return true;
+    }
+    if (msg.type === 'CAPTURE_TAB') {
+      chrome.tabs.captureVisibleTab({ format: 'png' }, (dataUrl) => {
+        if (chrome.runtime.lastError || !dataUrl) {
+          sendResponse({ error: chrome.runtime.lastError?.message || 'capture failed' });
+        } else {
+          sendResponse({ dataUrl });
+        }
+      });
       return true;
     }
   });

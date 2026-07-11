@@ -6,7 +6,7 @@ export class VolcengineOverlayLayout implements IOverlayLayout {
 
   buildRoot(): HTMLElement {
     const el = document.createElement('div');
-    el.id = '__volc_overlay';
+    el.id = '_panel_info';
     el.style.cssText =
       'position:fixed;top:80px;right:20px;width:280px;background:rgba(255,255,255,0.98);' +
       'backdrop-filter:blur(12px);border:1px solid #e2e8f0;border-radius:16px;' +

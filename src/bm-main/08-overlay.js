@@ -3,7 +3,7 @@ function buildHTML() {
   return '<style>' + CSS + '</style>' +
 
     // Header
-    '<div class="h"><span>&#128736;</span><h3>智谱秒杀助手</h3><span class="ver">v1.4.2</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
+    '<div class="h"><span>&#128736;</span><h3>抢购助手</h3><span class="ver">v1.4.3</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
     '<div class="b" id="_bd">' +
 
     // Card 1: Preparations
@@ -18,8 +18,8 @@ function buildHTML() {
     '<div class="c" id="_prodCard">' +
     '<div class="ch"><span class="ct">&#128230; Target Products</span><span class="tg tg-a" id="_prodTag">LOADING</span></div>' +
     '<div class="pr-bill" id="_bill">' +
-      '<button class="pr-bl" data-b="monthly">月付</button>' +
-      '<button class="pr-bl on" data-b="quarterly">季付 9折</button>' +
+      '<button class="pr-bl on" data-b="monthly">月付</button>' +
+      '<button class="pr-bl" data-b="quarterly">季付 9折</button>' +
       '<button class="pr-bl" data-b="yearly">年付 8折</button>' +
     '</div>' +
     '<div id="_prodList"><div style="font-size:8px;color:#94a3b8;text-align:center;padding:8px">Loading products...</div></div>' +
@@ -31,7 +31,11 @@ function buildHTML() {
     '<div class="pl-h"><span class="pl-l">&#127915; Captcha Pool</span><span class="pl-c" id="_plc">0 / 100</span></div>' +
     '<div class="pm" id="_pm"></div>' +
     '<div class="ps" id="_ps">暂无有效票 · 建议先录入验证码</div>' +
-    '<button class="ab" id="_ab">+ Solve Captcha</button>' +
+    '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0">' +
+      '<input type="checkbox" id="_ocrToggle" style="width:10px;height:10px;cursor:pointer">' +
+      '<label for="_ocrToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">🤖 OCR自动</label>' +
+    '</div>' +
+    '<div id="_ocrStatus" style="font-size:7px;color:#94a3b8;text-align:center;padding:2px 0;display:none"></div><button class="ab" id="_ab">+ Solve Captcha</button>' +
     '</div>' +
 
     // Card 4: Fire
@@ -39,10 +43,10 @@ function buildHTML() {
     '<div class="ch"><span class="ct">&#128293; Fire</span><span class="tg tg-r">LAUNCH</span></div>' +
     '<div class="fm" id="_meter"></div>' +
     '<div id="_fireCfg"></div>' +
-    '<div class="fc-row"><span class="fc-lbl">Strike Interval<span class="fc-tip" data-tip="串行模式（Strike / FIRE 串行）下每枪之间的间隔（毫秒）。BURST 按钮固定 200ms，不受此项影响。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555。实测 2100ms 是单用户最优节奏。">?</span></span><input class="fc-num" id="_fireBurstInterval" type="number" min="500" max="10000" step="100" value="2100"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Strike Interval<span class="fc-tip" data-tip="串行模式（Strike / FIRE 串行）下每枪之间的间隔（毫秒）。BURST 按钮固定 500ms，不受此项影响。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555。推荐 3200ms 起步，每个 555 自动退避 600ms。">?</span></span><input class="fc-num" id="_fireBurstInterval" type="number" min="1500" max="10000" step="100" value="3200"></div>' +
     '<div class="fc-row"><span class="fc-lbl">Pay<span class="fc-tip" data-tip="create-sign 使用的支付方式，决定打开支付宝还是微信支付。推荐：ALI（Alipay）。">?</span></span><select class="fc-sel" id="_firePayType"><option value="ALI">Alipay</option><option value="WE_CHAT">WeChat</option></select></div>' +
     '<button class="fb" id="_fb" disabled title="串行模式（Strike）：按上方 Burst Interval 顺序发射，遇到 555 自动退避，节奏稳。">&#9889; FIRE 串行 (0)</button>' +
-    '<button class="fbb" id="_fbb" disabled title="并发模式（Burst）：固定 200ms 间隔快速齐射，忽略 555 退避，火力密度高，适合秒杀窗口内火力压制。">&#9889; BURST 并发 (0) · 200ms</button>' +
+    '<button class="fbb" id="_fbb" disabled title="并发模式（Burst）：固定 500ms 间隔快速齐射，忽略 555 退避，火力密度高，适合秒杀窗口内火力压制。">&#9889; BURST 并发 (0) · 500ms</button>' +
     '<div style="font-size:8px;color:#64748b;text-align:center;padding:3px 0" id="_ammo"></div>' +
     '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:2px 0" id="_auths">Auth: pending</div>' +
     '<div style="font-size:8px;color:#94a3b8;text-align:center;padding:2px 0" id="_auto">Auto: waiting…</div>' +
@@ -96,7 +100,7 @@ function renderCaptchaMeter() {
 function applyFireConfigToControls(config) {
   var burstInterval = document.getElementById('_fireBurstInterval');
   var payType = document.getElementById('_firePayType');
-  if (burstInterval) burstInterval.value = String(Math.max(500, Math.min(10000, Math.round(Number(config.burstIntervalMs)) || 2100)));
+  if (burstInterval) burstInterval.value = String(Math.max(1500, Math.min(10000, Math.round(Number(config.burstIntervalMs)) || 2100)));
   if (payType) payType.value = config.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI';
 }
 
@@ -105,7 +109,7 @@ function readFireConfigFromControls() {
   var payType = document.getElementById('_firePayType');
   return {
     ...(_fireConfig || { burstIntervalMs: 2100, payType: 'ALI' }),
-    burstIntervalMs: Math.max(500, Math.min(10000, Math.round(Number(burstInterval ? burstInterval.value : 2100)) || 2100)),
+    burstIntervalMs: Math.max(1500, Math.min(10000, Math.round(Number(burstInterval ? burstInterval.value : 2100)) || 2100)),
     payType: payType && payType.value === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
   };
 }
@@ -113,7 +117,7 @@ function readFireConfigFromControls() {
 function sendFireConfigUpdate() {
   var cfg = readFireConfigFromControls();
   _fireConfig = cfg;
-  window.postMessage({ __miaosha_cmd: true, type: 'SET_FIRE_CONFIG', data: cfg }, '*');
+  window.postMessage({ [MSG_CMD]: true, type: 'SET_FIRE_CONFIG', data: cfg }, '*');
 }
 
 function bindFireControlEvents() {
@@ -146,7 +150,7 @@ function injectOverlay() {
   setupXhrInterception();
 
   window.addEventListener('message', function(ev) {
-    if (ev.source !== window || !ev.data || !ev.data.__miaosha_overlay) return;
+    if (ev.source !== window || !ev.data || !ev.data[MSG_OVL]) return;
     var d = ev.data;
 
     if (d.type === 'TICKET_COUNT') {
@@ -169,6 +173,25 @@ function injectOverlay() {
       renderCaptchaMeter();
     }
 
+    if (d.type === 'OCR_STATUS') {
+      var el = document.getElementById('_ocrStatus');
+      if (el) {
+        el.style.display = 'block';
+        var step = d.step || '';
+        if (step.indexOf('solved') !== -1) {
+          el.style.color = '#059669'; el.textContent = '🤖 OCR 已识别';
+        } else if (step.indexOf('found') !== -1) {
+          el.style.color = '#6366f1'; el.textContent = '🔍 ' + step;
+        } else if (step.indexOf('slider') !== -1) {
+          el.style.color = '#6366f1'; el.textContent = '👆 滑块验证码 · 请手动拖动滑块';
+        } else if (step.indexOf('captcha-ready') !== -1) {
+          el.style.color = '#d97706'; el.textContent = '🔍 验证码已弹出，正在识别...';
+        } else {
+          el.style.color = '#94a3b8'; el.textContent = '🔍 ' + (step || 'OCR 尝试中...');
+        }
+      }
+    }
+
     if (d.type === 'RUNTIME_CALIBRATION' && d.data) {
       applyRuntimeCalibration(d.data);
     }
@@ -178,7 +201,7 @@ function injectOverlay() {
       persistSelection();
       renderProducts();
       syncSelectionStatus();
-      window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'soldout-cleared' } }, '*');
+      window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'soldout-cleared' } }, '*');
     }
 
     if (d.type === 'FIRE_CONFIG' && d.data) {
@@ -212,10 +235,10 @@ function injectOverlay() {
 
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
   document.getElementById('_fb').addEventListener('click', function() {
-    window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
   });
   document.getElementById('_fbb').addEventListener('click', function() {
-    window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'burst' } }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'burst' } }, '*');
   });
 
   document.getElementById('_mn').addEventListener('click', function() {
@@ -226,7 +249,7 @@ function injectOverlay() {
   var optsBtn = document.getElementById('_opts');
   if (optsBtn) {
     optsBtn.addEventListener('click', function() {
-      window.postMessage({ __miaosha_cmd: true, type: 'OPEN_OPTIONS_PAGE' }, '*');
+      window.postMessage({ [MSG_CMD]: true, type: 'OPEN_OPTIONS_PAGE' }, '*');
     });
   }
 
@@ -267,7 +290,7 @@ function injectOverlay() {
       // Auth just became ready: event-driven product refresh, no independent polling.
       renderProductsLoading();
       loadBatchPreviewFromCache();
-      if (_productLoadStatus.status !== 'loaded') loadProducts();
+      if (_productLoadStatus.status !== 'loaded') loadProducts(true);
 
       var totalProducts = 0;
       try {
@@ -284,7 +307,7 @@ function injectOverlay() {
       _priorityList = [];
       _ticketCount = 0;
       _tickets = [];
-      try { sessionStorage.removeItem('bm_batch_preview'); } catch (e) {}
+      try { sessionStorage.removeItem(_NS + SK_BP); } catch (e) {}
       cmdToOverlay('CLEAR_TICKET_POOL');
       renderProductsAuthError();
       renderFireConfig();
@@ -316,7 +339,7 @@ setTimeout(injectOverlay, 1500);
 // ── Message Listener ──
 window.addEventListener('message', function(ev) {
   if (ev.source !== window) return;
-  if (ev.data?.__miaosha_cmd) {
+  if (ev.data?.[MSG_CMD]) {
     if (ev.data.type === 'PRODUCE_CAPTCHA') produceCaptcha();
   }
 });

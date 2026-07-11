@@ -79,7 +79,7 @@
           <span class="num">{String(idx + 1).padStart(2, '0')}</span>
         </header>
         <button class="cta primary" onclick={() => openEntry(sub.entryUrl)}>
-          ▶ 一键开始秒杀
+          ▶ 一键开始抢购
         </button>
       </article>
     {:else}

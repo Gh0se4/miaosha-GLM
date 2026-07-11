@@ -90,7 +90,10 @@ export class BigmodelProductProbe implements IProductProbe {
 
   extractFromPage(): ProductCatalog | null {
     try {
-      const cached = JSON.parse(window.sessionStorage.getItem('bm_batch_preview') || 'null');
+      // Try namespace-prefixed key
+      const ns = (typeof window !== 'undefined' && window.sessionStorage.getItem('_st')) || '';
+      const key = ns ? ns + 'bp' : '_cache_bp';
+      const cached = JSON.parse(window.sessionStorage.getItem(key) || 'null');
       const list = cached?.data?.productList;
       if (Array.isArray(list)) return this.convert(list);
     } catch {

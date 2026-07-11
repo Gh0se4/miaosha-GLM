@@ -1,4 +1,27 @@
-var O = '__bm_overlay';
+// ── Namespace bootstrap (must run before any other module) ───────────────
+// _NS is set by bm-early.js (document_start) via sessionStorage key '_st'.
+var _NS = (function() {
+  try {
+    var s = sessionStorage.getItem('_st');
+    if (s) return s;
+  } catch(e) {}
+  var fallback = 'b' + Math.random().toString(36).slice(2, 8);
+  try { sessionStorage.setItem('_st', fallback); } catch(e) {}
+  return fallback;
+})();
+
+var MSG_CMD = _NS + 'c';
+var MSG_EVT = _NS + 'e';
+var MSG_OVL = _NS + 'o';
+
+var SK_BP = 'bp';
+var SK_PR = 'pr';
+var SK_TK = 'tk';
+var SK_BL = 'bl';
+var SK_PL = 'pl';
+// ── End namespace bootstrap ────────────────────────────────────────────────
+
+var O = _NS + 'ol';
 var CSS =
   '#'+O+'{position:fixed;top:72px;left:20px;width:300px;background:rgba(255,255,255,0.97);backdrop-filter:blur(12px);border:1px solid #e2e8f0;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);z-index:99999;font-family:Inter,system-ui,sans-serif;color:#1e293b;max-height:calc(100vh - 92px);overflow-y:auto}' +
   '#'+O+'::-webkit-scrollbar{width:3px}#'+O+'::-webkit-scrollbar-thumb{background:rgba(99,102,241,0.2);border-radius:99px}' +

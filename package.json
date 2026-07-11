@@ -1,7 +1,7 @@
 {
-  "name": "miaosha-GLM",
-  "version": "1.4.2",
-  "description": "智谱 Coding Plan 秒杀助手浏览器扩展",
+  "name": "qianggou-GLM",
+  "version": "1.4.3",
+  "description": "Coding Plan 抢购助手浏览器扩展",
   "scripts": {
     "dev": "wxt",
     "build:overlay": "node scripts/build-overlay.js",

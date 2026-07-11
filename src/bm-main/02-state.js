@@ -1,3 +1,5 @@
+// Namespace (_NS, MSG_*, SK_*) is defined in 00-css.js (runs first)
+
 var CAPTCHA_APPID = '196026326';
 var S = {}; // state
 var _batchMode = false; // batch continuous captcha solving
@@ -9,7 +11,7 @@ var _authFailed = false; // true when batch-preview API returns code=1001 (not l
 // ── Page-level ticket store (sessionStorage) ──
 // Tickets live in the page's sessionStorage: they survive a refresh of the same tab,
 // but are destroyed automatically when the tab/window is closed.
-var TICKET_STORE_KEY = '__bm_tickets';
+var TICKET_STORE_KEY = _NS + SK_TK;
 function readPageTicketStore() {
   try { return JSON.parse(window.sessionStorage.getItem(TICKET_STORE_KEY) || '[]'); } catch (e) { return []; }
 }
@@ -22,10 +24,20 @@ function clearPageTicketStore() {
 
 // Bridge: isolated content script asks MAIN world to read/write the page store.
 window.addEventListener('message', function(ev) {
-  if (ev.source !== window || !ev.data || !ev.data.__miaosha_cmd) return;
+  if (ev.source !== window || !ev.data) return;
   var d = ev.data;
+
+  // Namespace discovery — ISOLATED world asks for _NS before it knows the markers
+  if (d.type === 'GET_NAMESPACE') {
+    window.postMessage({ type: 'NAMESPACE_DATA', ns: _NS, markers: { cmd: MSG_CMD, evt: MSG_EVT, ovl: MSG_OVL } }, '*');
+    return;
+  }
+
+  if (!d[MSG_CMD]) return;
   if (d.type === 'READ_TICKET_STORE') {
-    window.postMessage({ __miaosha: true, type: 'TICKET_STORE_DATA', reqId: d.reqId, list: readPageTicketStore() }, '*');
+    var resp = {}; resp[MSG_EVT] = true;
+    resp.type = 'TICKET_STORE_DATA'; resp.reqId = d.reqId; resp.list = readPageTicketStore();
+    window.postMessage(resp, '*');
   } else if (d.type === 'WRITE_TICKET_STORE') {
     writePageTicketStore(d.list);
   } else if (d.type === 'CLEAR_TICKET_STORE') {
@@ -103,21 +115,29 @@ function renderPrefireAuthStatus(data) {
   authEl.textContent = 'Auth: ' + source + ' age ' + ageSec + suffix;
 }
 
+// ── Namespace-aware messaging helpers ──────────────────────────────────────
 function postMsg(type, payload) {
-  window.postMessage({ __miaosha: true, type: type, payload: payload }, '*');
+  var m = { type: type, payload: payload };
+  m[MSG_EVT] = true;
+  window.postMessage(m, '*');
 }
-function cmdToOverlay(type) {
-  window.postMessage({ __miaosha_cmd: true, type: type }, '*');
+function cmdToOverlay(type, data) {
+  var m = { type: type };
+  if (data !== undefined) m.data = data;
+  m[MSG_CMD] = true;
+  window.postMessage(m, '*');
 }
 function postToOverlay(type, data) {
-  window.postMessage({ __miaosha_overlay: true, type: type, data: data }, '*');
+  var m = { type: type, data: data };
+  m[MSG_OVL] = true;
+  window.postMessage(m, '*');
 }
 
 // ── Product Selection State ──
 var _productMatrix = { monthly: [], quarterly: [], yearly: [] };
-var _billing = 'yearly';
+var _billing = 'monthly';
 var _priorityList = []; // ordered priority list of { productId }
 var _ticketCount = 0;
 var _tickets = []; // per-ticket lifecycle list from content script
 var _planOrder = ['Lite', 'Pro', 'Max'];
-var _fireConfig = { payType: 'ALI', burstIntervalMs: 2100 };
+var _fireConfig = { payType: 'ALI', burstIntervalMs: 3200 };

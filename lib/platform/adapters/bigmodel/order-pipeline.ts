@@ -36,7 +36,7 @@ export interface ClassifiedShotResult {
   rawServerMsg: string;
 }
 
-export function classifyPreviewError(body: { code?: number; msg?: string }): ClassifiedShotResult {
+export function classifyPreviewError(body: { code?: number; msg?: string }, rawBodyText?: string): ClassifiedShotResult {
   const code = body.code ?? 500;
   const raw = body.msg || '';
 
@@ -52,7 +52,12 @@ export function classifyPreviewError(body: { code?: number; msg?: string }): Cla
   if (code === 555 || raw.toLowerCase().includes('system busy')) {
     return { outcome: 'busy', code, serverMsg: '【智谱 --> 当前用户：2 秒滑动窗口限流】' + raw, rawServerMsg: raw };
   }
-  return { outcome: 'error', code, serverMsg: '【智谱/网络 --> 插件：未知服务端错误】' + raw, rawServerMsg: raw };
+  const bodyText = rawBodyText || raw || '';
+  if (bodyText.indexOf('<!doctypehtml>') !== -1 || bodyText.indexOf('<html') !== -1) {
+    return { outcome: 'error', code: 500, serverMsg: '⚠️ WAF拦截：阿里云WAF返回HTML验证页面，当前会话可能已被风控', rawServerMsg: bodyText.substring(0, 300) };
+  }
+  const snippet = bodyText.substring(0, 300);
+  return { outcome: 'error', code, serverMsg: '服务端返回 ' + code + (snippet ? ' [' + snippet + ']' : ''), rawServerMsg: snippet };
 }
 
 export class BigmodelOrderPipeline implements IOrderPipeline {
@@ -111,8 +116,9 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
         };
       }
 
-      const classified = classifyPreviewError(body);
-      return { success: false, error: classified.serverMsg, metadata: { classified, raw: body } };
+      const rawBodyText = typeof body === 'string' ? body : JSON.stringify(body);
+      const classified = classifyPreviewError(body, rawBodyText);
+      return { success: false, error: classified.serverMsg, metadata: { classified, raw: body, rawBodyText } };
     } catch (e: any) {
       return {
         success: false,

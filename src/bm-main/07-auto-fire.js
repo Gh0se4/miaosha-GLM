@@ -50,5 +50,5 @@ function dispatchAutoFire() {
   if (lg) lg.innerHTML += '> Auto-fire dispatched @ ' + ts + '<br>';
   // Convert server-aligned fire point back to local epoch for content-script timers.
   var startMs = _rt.nextSaleTime - _rt.latencyMs - 10 - _rt.clockOffsetMs;
-  window.postMessage({ __miaosha_cmd: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
+  window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
 }

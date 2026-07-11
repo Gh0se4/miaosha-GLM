@@ -11,10 +11,65 @@ import { captchaStore } from '../lib/settings/captcha';
 import { bigmodelAdapter } from '../lib/platform';
 import type { PlatformAuth } from '../lib/platform';
 import { createAuthStore } from '../lib/platform/shared/stores';
-import { xhrRequest } from '../lib/platform/adapters/bigmodel/request';
+import { xhrRequest, setMainWorldFetcher, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 const TICKET_TTL_MS = 5 * 60 * 1000; // alpha: 5 minutes per-ticket lifecycle
+
+// ── Runtime namespace (set by bm-early.js at document_start) ──────────────
+let _ns = '';
+let MSG_CMD = '';
+let MSG_EVT = '';
+let MSG_OVL = '';
+
+function discoverNamespace(): Promise<string> {
+  return new Promise((resolve) => {
+    // Primary: sessionStorage (set synchronously by bm-early.js at document_start)
+    try {
+      const ssNs = window.sessionStorage.getItem('_st');
+      if (ssNs) {
+        _ns = ssNs;
+        MSG_CMD = _ns + 'c';
+        MSG_EVT = _ns + 'e';
+        MSG_OVL = _ns + 'o';
+        resolve(_ns);
+        return;
+      }
+    } catch(e) {}
+
+    // Fallback: ask MAIN world via bootstrap protocol
+    function handler(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data || ev.data.type !== 'NAMESPACE_DATA') return;
+      window.removeEventListener('message', handler);
+      _ns = ev.data.ns || '';
+      MSG_CMD = ev.data.markers?.cmd || (_ns + 'c');
+      MSG_EVT = ev.data.markers?.evt || (_ns + 'e');
+      MSG_OVL = ev.data.markers?.ovl || (_ns + 'o');
+      resolve(_ns);
+    }
+    window.addEventListener('message', handler);
+    window.postMessage({ type: 'GET_NAMESPACE' }, '*');
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      try {
+        const finalNs = window.sessionStorage.getItem('_st');
+        if (finalNs) {
+          _ns = finalNs;
+          MSG_CMD = _ns + 'c';
+          MSG_EVT = _ns + 'e';
+          MSG_OVL = _ns + 'o';
+          resolve(_ns);
+          return;
+        }
+      } catch(e) {}
+      _ns = 'b' + Math.random().toString(36).slice(2, 8);
+      MSG_CMD = _ns + 'c';
+      MSG_EVT = _ns + 'e';
+      MSG_OVL = _ns + 'o';
+      resolve(_ns);
+    }, 1500);
+  });
+}
 let TICKET_POOL_MAX = 100; // synced with captchaConfig.batchSessionLimit (single source of truth)
 const REMINDER_PHASE_MINUTES_ASC = [...SALE_ALARM_MINUTES].sort((a, b) => a - b);
 
@@ -67,7 +122,7 @@ interface ClassifiedShotResult {
   responsibility: ErrorResponsibility;
 }
 
-function classifyPreviewError(body: { code?: number; msg?: string }): ClassifiedShotResult {
+function classifyPreviewError(body: { code?: number; msg?: string }, rawBodyText?: string): ClassifiedShotResult {
   const code = body.code ?? 500;
   const raw = body.msg || '';
 
@@ -75,7 +130,7 @@ function classifyPreviewError(body: { code?: number; msg?: string }): Classified
     return {
       outcome: 'captchaService',
       code,
-      serverMsg: '【智谱 --> 腾讯验证码核销：超过了《每秒并发请求量（QPS）限制》】' + raw,
+      serverMsg: '【智谱 --> 腾讯验证码核销：QPS超限】' + raw,
       rawServerMsg: raw,
       responsibility: { subject: '智谱', target: '腾讯验证码核销', cause: '超过了《每秒并发请求量（QPS）限制》' },
     };
@@ -107,12 +162,25 @@ function classifyPreviewError(body: { code?: number; msg?: string }): Classified
       responsibility: { subject: '智谱', target: '当前用户', cause: '2 秒滑动窗口限流' },
     };
   }
+  // Detect WAF HTML response (Alibaba WAF challenge page)
+  const bodyText = rawBodyText || raw || '';
+  if (bodyText.indexOf('<!doctypehtml>') !== -1 || bodyText.indexOf('<html') !== -1) {
+    return {
+      outcome: 'error',
+      code: 500,
+      serverMsg: '⚠️ WAF拦截：阿里云WAF返回了HTML验证页面，当前会话可能已被风控。建议暂停1-2分钟后再试。',
+      rawServerMsg: bodyText.substring(0, 300),
+      responsibility: { subject: '阿里云WAF', target: '当前会话', cause: '请求被WAF识别为异常流量，返回HTML验证页面' },
+    };
+  }
+  // Unknown error — include raw body snippet for diagnostics
+  const snippet = bodyText.substring(0, 200);
   return {
     outcome: 'error',
     code,
-    serverMsg: '【智谱/网络 --> 插件：未知服务端错误】' + raw,
-    rawServerMsg: raw,
-    responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
+    serverMsg: '【智谱/网络 --> 插件：服务端返回 ' + code + '】' + (snippet ? ' [' + snippet + ']' : ''),
+    rawServerMsg: snippet,
+    responsibility: { subject: '智谱/网络', target: '插件', cause: '服务端返回 ' + code + (snippet ? ' — ' + snippet : '') },
   };
 }
 
@@ -154,12 +222,12 @@ function readPageTicketStore(): Promise<any[]> {
   return new Promise((resolve) => {
     const reqId = Math.random().toString(36).slice(2);
     function handler(ev: MessageEvent) {
-      if (ev.source !== window || !ev.data?.__miaosha || ev.data.type !== 'TICKET_STORE_DATA' || ev.data.reqId !== reqId) return;
+      if (ev.source !== window || !ev.data?.[MSG_EVT] || ev.data.type !== 'TICKET_STORE_DATA' || ev.data.reqId !== reqId) return;
       window.removeEventListener('message', handler);
       resolve(ev.data.list || []);
     }
     window.addEventListener('message', handler);
-    window.postMessage({ __miaosha_cmd: true, type: 'READ_TICKET_STORE', reqId }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'READ_TICKET_STORE', reqId }, '*');
     setTimeout(() => {
       window.removeEventListener('message', handler);
       resolve([]);
@@ -168,12 +236,12 @@ function readPageTicketStore(): Promise<any[]> {
 }
 
 function writePageTicketStore() {
-  window.postMessage({ __miaosha_cmd: true, type: 'WRITE_TICKET_STORE', list: _ticketPool }, '*');
+  window.postMessage({ [MSG_CMD]: true, type: 'WRITE_TICKET_STORE', list: _ticketPool }, '*');
 }
 
 function clearPageTicketStore() {
   _ticketPool = [];
-  window.postMessage({ __miaosha_cmd: true, type: 'CLEAR_TICKET_STORE' }, '*');
+  window.postMessage({ [MSG_CMD]: true, type: 'CLEAR_TICKET_STORE' }, '*');
 }
 
 function isExtensionContextValid(): boolean {
@@ -289,7 +357,7 @@ function getSalePhase(config: SaleTimeConfig): number | null {
 }
 
 function removeBanner() {
-  const existing = document.getElementById('miaosha-flash-overlay');
+  const existing = document.getElementById(_ns + 'fo');
   if (existing) existing.remove();
   if (bannerDismissTimer) {
     clearTimeout(bannerDismissTimer);
@@ -301,12 +369,12 @@ function createOverlay(min: number) {
   removeBanner();
 
   const reminderText = min <= 5
-    ? `🔥 距智谱秒杀还有 ${min} 分钟！请立刻录入验证码，越多越好`
-    : `🔥 距智谱秒杀还有 ${min} 分钟`;
+    ? `🔥 距抢购还有 ${min} 分钟！请立刻录入验证码，越多越好`
+    : `🔥 距抢购还有 ${min} 分钟`;
   const actionText = min <= 5 ? '去录入验证码' : '立即准备';
 
   const overlay = document.createElement('div');
-  overlay.id = 'miaosha-flash-overlay';
+  overlay.id = _ns + 'fo';
   overlay.innerHTML = `
     <div style="
       position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
@@ -315,18 +383,18 @@ function createOverlay(min: number) {
       font-weight: 800; text-align: center;
       display: flex; align-items: center; justify-content: center; gap: 12px;
       box-shadow: 0 4px 20px rgba(220,38,38,0.4);
-      animation: miaoshaPulse 1s ease-in-out infinite alternate;
+      animation: ' + _ns + 'ap 1s ease-in-out infinite alternate;
       cursor: pointer; font-family: system-ui, -apple-system, sans-serif;
     ">
       <span>${reminderText}</span>
-      <button id="miaosha-open-btn" style="
+      <button id=_ns + 'ob' style="
         background: #fff; color: #dc2626; border: none;
         padding: 5px 14px; border-radius: 20px; font-weight: 700;
         cursor: pointer; font-size: 13px;
       ">${actionText}</button>
     </div>
     <style>
-      @keyframes miaoshaPulse {
+      @keyframes ' + _ns + 'ap {
         from { opacity: 0.85; transform: scale(1); }
         to { opacity: 1; transform: scale(1.01); }
       }
@@ -334,10 +402,10 @@ function createOverlay(min: number) {
   `;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).id === 'miaosha-open-btn') return;
+    if ((e.target as HTMLElement).id === _ns + 'ob') return;
     removeBanner();
   });
-  document.getElementById('miaosha-open-btn')?.addEventListener('click', () => {
+  document.getElementById(_ns + 'ob')?.addEventListener('click', () => {
     removeBanner();
   });
 
@@ -430,7 +498,7 @@ function createForceStopBanner(options?: {
 }) {
   removeForceStopBanner();
   const el = document.createElement('div');
-  el.id = 'miaosha-force-stop-banner';
+  el.id = _ns + 'fb';
   el.innerHTML = `
     <div style="
       position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
@@ -439,7 +507,7 @@ function createForceStopBanner(options?: {
       font-weight: 800; text-align: center;
       display: flex; align-items: center; justify-content: center; gap: 10px;
       box-shadow: 0 4px 20px rgba(220,38,38,0.4);
-      animation: miaoshaPulse 1s ease-in-out infinite alternate;
+      animation: ' + _ns + 'ap 1s ease-in-out infinite alternate;
       font-family: system-ui, -apple-system, sans-serif;
     ">
       <span style="
@@ -448,12 +516,12 @@ function createForceStopBanner(options?: {
         border-radius: 999px; line-height: 1;
         border: 1px solid rgba(255,255,255,0.4);
       ">v${chrome.runtime.getManifest().version}</span>
-      <span id="miaosha-banner-wave" style="
+      <span id=_ns + 'bw' style="
         font-size: 12px; font-weight: 800; color: #fff; background: #6366f1;
         padding: 3px 10px; border-radius: 999px; line-height: 1;
       ">Wave 1</span>
       <span>&#9632; Batch Mode Active — solving captchas</span>
-      <button id="miaosha-batch-fire-btn" style="
+      <button id=_ns + 'bf' style="
         display: inline-flex; align-items: center; gap: 5px;
         padding: 5px 12px; border: 2px solid #3f6212;
         background: #a3e635; color: #14532d; border-radius: 6px;
@@ -461,9 +529,9 @@ function createForceStopBanner(options?: {
         box-shadow: 0 0 0 2px rgba(163,230,53,.45), 0 4px 10px rgba(0,0,0,.2);
         animation: fvBtnPulse 1.2s ease-in-out infinite alternate;
       " disabled title="串行模式：按 Strike Interval 顺序发射，遇到 555 自动退避，节奏稳。">
-        &#9889; Fire 串行 (<span id="miaosha-batch-fire-count">0</span>)
+        &#9889; Fire 串行 (<span id=_ns + 'bc'>0</span>)
       </button>
-      <button id="miaosha-batch-burst-btn" style="
+      <button id=_ns + 'bb' style="
         display: inline-flex; align-items: center; gap: 5px;
         padding: 5px 12px; border: 2px solid #92400e;
         background: #f59e0b; color: #78350f; border-radius: 6px;
@@ -471,7 +539,7 @@ function createForceStopBanner(options?: {
         box-shadow: 0 0 0 2px rgba(245,158,11,.45), 0 4px 10px rgba(0,0,0,.2);
         animation: fvBtnPulseAmber 1.2s ease-in-out infinite alternate;
       " disabled title="并发模式：固定 200ms 间隔快速齐射，忽略 555 退避，火力密度高。">
-        &#9889; BURST 并发 (<span id="miaosha-batch-burst-count">0</span>) · 200ms
+        &#9889; BURST 并发 (<span id=_ns + 'bk'>0</span>) · 200ms
       </button>
       <kbd style="
         padding: 2px 8px; background: rgba(255,255,255,0.25);
@@ -481,7 +549,7 @@ function createForceStopBanner(options?: {
       <span>to force stop</span>
     </div>
     <style>
-      @keyframes miaoshaPulse {
+      @keyframes ' + _ns + 'ap {
         from { opacity: 0.85; transform: scale(1); }
         to { opacity: 1; transform: scale(1.01); }
       }
@@ -500,10 +568,10 @@ function createForceStopBanner(options?: {
   bannerWaveCount = 0;
   updateBannerWaveBadge();
 
-  const fireBtn = document.getElementById('miaosha-batch-fire-btn') as HTMLButtonElement | null;
-  const fireCountEl = document.getElementById('miaosha-batch-fire-count');
-  const burstBtn = document.getElementById('miaosha-batch-burst-btn') as HTMLButtonElement | null;
-  const burstCountEl = document.getElementById('miaosha-batch-burst-count');
+  const fireBtn = document.getElementById(_ns + 'bf') as HTMLButtonElement | null;
+  const fireCountEl = document.getElementById(_ns + 'bc');
+  const burstBtn = document.getElementById(_ns + 'bb') as HTMLButtonElement | null;
+  const burstCountEl = document.getElementById(_ns + 'bk');
 
   if (options?.onFire && fireBtn) {
     fireBtn.addEventListener('click', (e) => {
@@ -552,7 +620,7 @@ function createForceStopBanner(options?: {
 }
 
 function removeForceStopBanner() {
-  const el = document.getElementById('miaosha-force-stop-banner');
+  const el = document.getElementById(_ns + 'fb');
   if (el) {
     const timer = Number(el.dataset.countTimer);
     if (timer) clearInterval(timer);
@@ -563,12 +631,12 @@ function removeForceStopBanner() {
 let bannerWaveCount = 0;
 
 function updateBannerWaveBadge() {
-  const badge = document.getElementById('miaosha-banner-wave');
+  const badge = document.getElementById(_ns + 'bw');
   if (badge) badge.textContent = 'Wave ' + bannerWaveCount;
 }
 
 function postToOverlay(msg: any) {
-  window.postMessage({ __miaosha_overlay: true, ...msg }, '*');
+  window.postMessage({ [MSG_OVL]: true, ...msg }, '*');
 }
 
 function tokenSuffix(authz: string | undefined): string {
@@ -587,16 +655,75 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Extract raw response body from order pipeline result for diagnostics
+function getRawBody(result: any): string {
+  try {
+    const meta = result.metadata || {};
+    if (meta.rawBodyText) return meta.rawBodyText.substring(0, 500);
+    const raw = meta.raw;
+    if (!raw) return '';
+    return (typeof raw === 'string' ? raw : JSON.stringify(raw)).substring(0, 500);
+  } catch { return ''; }
+}
+
+// ── MAIN world fetch relay ───────────────────────────────────────────────
+// Routes API requests through the page's native fetch (MAIN world) to avoid
+// Alibaba WAF detection of extension-origin requests.
+function mainWorldFetch(opts: {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+}): Promise<{ status: number; statusText: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    const reqId = Math.random().toString(36).slice(2);
+    function handler(ev: MessageEvent) {
+      if (ev.source !== window || !ev.data?.[MSG_EVT] || ev.data.type !== 'DO_FETCH_RESULT' || ev.data.reqId !== reqId) return;
+      window.removeEventListener('message', handler);
+      if (ev.data.ok) {
+        resolve({ status: ev.data.status, statusText: ev.data.statusText, body: ev.data.body });
+      } else {
+        reject(new Error(ev.data.error || 'fetch error'));
+      }
+    }
+    window.addEventListener('message', handler);
+    window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', reqId, opts }, '*');
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error("MAIN world fetch timeout"));
+    }, 30000);
+  });
+}
+
 export default defineContentScript({
-  matches: ['*://*.bigmodel.cn/*'],
+  matches: ['*://bigmodel.cn/*', '*://*.bigmodel.cn/*'],
   runAt: 'document_idle',
 
   async main() {
-    // Inject MAIN world script
+    // Inject MAIN world script FIRST so it can handle GET_NAMESPACE fallback
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('/bm-main.js');
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
+
+    // Now discover runtime namespace (set by bm-early.js at document_start).
+    // Primary source: sessionStorage (ISOLATED world can access it).
+    // Fallback: GET_NAMESPACE via postMessage (bm-main.js handles it).
+    await discoverNamespace();
+
+    // Route ALL API requests through the page's MAIN world fetch to avoid
+    // Alibaba WAF detection of extension-origin requests.
+    setMainWorldFetcher(async (fetchOpts: XhrRequestOptions): Promise<XhrResponse> => {
+      const result = await mainWorldFetch({
+        method: fetchOpts.method || 'GET',
+        url: fetchOpts.url,
+        headers: fetchOpts.headers || {},
+        body: fetchOpts.body,
+      });
+      let data: any;
+      try { data = JSON.parse(result.body); } catch { data = result.body; }
+      return { status: result.status, statusText: result.statusText, data, headers: {} };
+    });
 
     async function getPrefireAuthStatus() {
       const auth = await getFreshAuth();
@@ -917,31 +1044,15 @@ export default defineContentScript({
             });
           } else {
             const raw = result.metadata?.raw as { code?: number; msg?: string } | undefined;
-            const cls = raw ? classifyPreviewError(raw) : {
+            const rawBody = result.metadata?.raw;
+            const rawBodyText = (result.metadata as any)?.rawBodyText || (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
+            const cls = rawBody ? classifyPreviewError(rawBody as any, rawBodyText) : {
               outcome: (result.metadata?.classified as any)?.outcome || 'error',
               code: (result.metadata?.classified as any)?.code || 500,
-              serverMsg: result.error || 'unknown error',
-              rawServerMsg: result.error || 'unknown error',
+              rawBody: getRawBody(result), serverMsg: result.error || 'unknown error',
+              rawServerMsg: rawBodyText || result.error || 'unknown error',
               responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
             };
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
-            postToOverlay({
-              type: 'FIRE_SHOT_RESULT',
-              data: {
-                shotIdx: idx,
-                productId: shot.productId,
-                priority: 1,
-                wave: shot.wave,
-                outcome: cls.outcome,
-                code: cls.code,
-                rtt,
-                sentAt: t1,
-                ticketMask: maskTicket(shot.ticket),
-                serverMsg: cls.serverMsg,
-                rawServerMsg: cls.rawServerMsg,
-                responsibility: cls.responsibility,
-              },
-            });
           }
         } catch (e: any) {
           const cls = neterrResponsibility(e?.message || 'unknown');
@@ -958,7 +1069,7 @@ export default defineContentScript({
               rtt: Date.now() - t1,
               sentAt: t1,
               ticketMask: maskTicket(shot.ticket),
-              serverMsg: cls.serverMsg,
+              rawBody: getRawBody(result), serverMsg: cls.serverMsg,
               rawServerMsg: cls.rawServerMsg,
               responsibility: cls.responsibility,
             },
@@ -1048,6 +1159,7 @@ export default defineContentScript({
 
     // ── Unified strike sequence: shared by default strike and burst mode ──
     let currentStrikeCancel: (() => void) | null = null;
+    let lastShotSentAt = 0;
 
     interface StrikeSequenceOptions {
       label: string;
@@ -1162,7 +1274,7 @@ export default defineContentScript({
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
-              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), serverMsg: '' },
+              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
             });
             if (options.pollPayment) {
               void pollPayCheck(auth, bizId, (status) => {
@@ -1184,19 +1296,20 @@ export default defineContentScript({
             return 'success';
           } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out' } });
             return 'soldout';
           } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy' } });
             return 'busy';
           } else {
-            const raw = result.metadata?.raw as { code?: number; msg?: string } | undefined;
-            const cls = raw ? classifyPreviewError(raw) : {
+            const rawBody = result.metadata?.raw;
+            const rawBodyText = (result.metadata as any)?.rawBodyText || (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
+            const cls = rawBody ? classifyPreviewError(rawBody as any, rawBodyText) : {
               outcome: (result.metadata?.classified as any)?.outcome || 'error',
               code: (result.metadata?.classified as any)?.code || 500,
-              serverMsg: result.error || 'unknown error',
-              rawServerMsg: result.error || 'unknown error',
+              rawBody: getRawBody(result), serverMsg: result.error || 'unknown error',
+              rawServerMsg: rawBodyText || result.error || 'unknown error',
               responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
             };
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
@@ -1211,7 +1324,7 @@ export default defineContentScript({
                 rtt,
                 sentAt: t1,
                 ticketMask: maskTicket(shot.ticket),
-                serverMsg: cls.serverMsg,
+                rawBody: getRawBody(result), serverMsg: cls.serverMsg,
                 rawServerMsg: cls.rawServerMsg,
                 responsibility: cls.responsibility,
               },
@@ -1233,7 +1346,7 @@ export default defineContentScript({
               rtt: Date.now() - t1,
               sentAt: t1,
               ticketMask: maskTicket(shot.ticket),
-              serverMsg: cls.serverMsg,
+              rawBody: getRawBody(result), serverMsg: cls.serverMsg,
               rawServerMsg: cls.rawServerMsg,
               responsibility: cls.responsibility,
             },
@@ -1242,12 +1355,10 @@ export default defineContentScript({
         }
       };
 
-      const baseDelay = Math.max(0, startMs - Date.now());
+      
       let currentInterval = burstIntervalMs;
       let consecutiveBusy = 0;
       let shotIdx = 0;
-      const BUSY_BACKOFF_MS = 200;
-      const MAX_INTERVAL_MS = 3000;
 
       const scheduleNext = () => {
         if (cancelled || succeeded || shotIdx >= total) {
@@ -1262,21 +1373,50 @@ export default defineContentScript({
         const shot = plan.shots[shotIdx];
         const idx = shotIdx;
         shotIdx++;
+
+        // Smart interval calculation
+        let delay = currentInterval;
+        if (shotIdx === 1) {
+          delay = Math.max(0, startMs - Date.now()); // first shot: fire immediately
+        } else if (consecutiveBusy >= 4) {
+          // Penalty box: 4+ consecutive 555s → pause 30-60 seconds
+          delay = 30000 + Math.floor(Math.random() * 30000);
+          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ penalty box: ${Math.round(delay/1000)}s cooldown after ${consecutiveBusy} consecutive 555s` });
+          consecutiveBusy = 0; // reset counter after cooldown
+        } else if (consecutiveBusy >= 2) {
+          // Exponential backoff: double interval for each additional 555
+          delay = Math.min(20000, currentInterval * (1 << Math.min(consecutiveBusy - 1, 4)));
+        }
+        // Add random jitter ±25% and ensure minimum 3s gap
+        const jitter = 0.75 + Math.random() * 0.5; // 0.75x ~ 1.25x
+        delay = Math.round(Math.max(3000, delay * jitter));
+
         timers.push(
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
+            if (outcome === 'soldout') {
+              // Sold out — fire next shot immediately (product may have changed)
+              consecutiveBusy = 0;
+              currentInterval = burstIntervalMs;
+              scheduleNext();
+              return;
+            }
             if (options.enableBusyBackoff && outcome === 'busy') {
               consecutiveBusy++;
-              if (consecutiveBusy >= 2) {
-                currentInterval = Math.min(MAX_INTERVAL_MS, currentInterval + BUSY_BACKOFF_MS);
-                postToOverlay({ type: 'FIRE_RESULT', line: `> 555 backoff: interval increased to ${currentInterval}ms` });
-              }
-            } else {
+              postToOverlay({ type: 'FIRE_RESULT', line: `> 555 #${consecutiveBusy}: next interval ~${Math.round(currentInterval * (consecutiveBusy >= 2 ? 2 : 1.2)/1000)}s` });
+            } else if (outcome === 'neterr') {
+              // Network error — brief pause then retry
               consecutiveBusy = 0;
+              currentInterval = Math.max(burstIntervalMs, 3000);
+              postToOverlay({ type: 'FIRE_RESULT', line: '> network error — resuming in 3s' });
+            } else {
+              // success or error — reset backoff
+              consecutiveBusy = 0;
+              currentInterval = burstIntervalMs;
             }
 
             scheduleNext();
-          }, shotIdx === 1 ? baseDelay : currentInterval),
+          }, delay),
         );
       };
 
@@ -1306,7 +1446,7 @@ export default defineContentScript({
       await runStrikeSequence(startMs, auth, {
         label: 'BURST',
         mode: 'burst',
-        burstIntervalMs: 200,
+        burstIntervalMs: 500,
         enableBusyBackoff: false,
         pollPayment: true,
       });
@@ -1362,7 +1502,7 @@ export default defineContentScript({
       if (event.source !== window) return;
 
       // From overlay (MAIN world) — commands
-      if (event.data?.__miaosha_cmd) {
+      if (event.data?.[MSG_CMD]) {
         if (event.data.type === 'GET_TICKET_COUNT') {
           const info = await getTicketInfo();
           postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
@@ -1410,6 +1550,90 @@ export default defineContentScript({
           } catch {}
           postToOverlay({ type: 'FIRE_CONFIG', data: next });
         }
+        if (event.data.type === 'OCR_CAPTURE' && event.data.data?.reqId) {
+          // Capture visible tab (includes cross-origin captcha popup)
+          try {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              chrome.runtime.sendMessage({ type: 'CAPTURE_TAB' }, (response) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else if (response && response.dataUrl) resolve(response.dataUrl);
+                else reject(new Error('capture failed'));
+              });
+            });
+            // dataUrl is "data:image/png;base64,..." — strip prefix
+            const b64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+            const resp = await fetch('http://127.0.0.1:18765/solve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: b64 })
+            });
+            const result = await resp.json();
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, data: result });
+          } catch (e: any) {
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, error: e.message });
+          }
+        }
+        if (event.data.type === 'OCR_SOLVE_URL' && event.data.data?.url) {
+          try {
+            console.log('[OCR-ISO] downloading:', event.data.data.url.substring(0,60));
+            const imgResp = await fetch(event.data.data.url);
+            const blob = await imgResp.blob();
+            console.log('[OCR-ISO] downloaded:', blob.size, 'bytes');
+
+            // Load image to get dimensions, then convert blob→base64 for OCR
+            const { b64, imgW, imgH } = await new Promise<{b64:string,imgW:number,imgH:number}>((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => {
+                const c = document.createElement('canvas');
+                c.width = img.naturalWidth;
+                c.height = img.naturalHeight;
+                const ctx = c.getContext('2d')!;
+                ctx.drawImage(img, 0, 0);
+                resolve({ b64: c.toDataURL('image/png').split(',')[1], imgW: img.naturalWidth, imgH: img.naturalHeight });
+              };
+              img.onerror = () => reject(new Error('image load failed'));
+              img.src = URL.createObjectURL(blob);
+            });
+
+            console.log('[OCR-ISO] calling ocr server, image size:', imgW + 'x' + imgH);
+            const ocrResp = await fetch('http://127.0.0.1:18765/solve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: b64 })
+            });
+            const result = await ocrResp.json();
+            console.log('[OCR-ISO] ocr result:', JSON.stringify(result));
+            if (result?.data) { result.data.imgW = imgW; result.data.imgH = imgH; }
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, data: result });
+          } catch (e: any) {
+            console.error('[OCR-ISO] error:', e.message);
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, error: e.message });
+          }
+        }
+        if (event.data.type === 'OCR_SOLVE' && event.data.data?.image) {
+          // Direct OCR proxy (for canvas-based captchas that ARE accessible)
+          const imageB64 = event.data.image;
+          try {
+            const resp = await fetch('http://127.0.0.1:18765/solve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: imageB64 })
+            });
+            const result = await resp.json();
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, data: result });
+          } catch (e: any) {
+            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, error: e.message });
+          }
+        }
+        if (event.data.type === 'OCR_CHECK') {
+          try {
+            const resp = await fetch('http://127.0.0.1:18765/health');
+            const data = await resp.json();
+            postToOverlay({ type: 'OCR_STATUS', available: !!(data && data.ok) });
+          } catch {
+            postToOverlay({ type: 'OCR_STATUS', available: false });
+          }
+        }
         if (event.data.type === 'OPEN_OPTIONS_PAGE') {
           try { chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' }); } catch {}
         }
@@ -1421,7 +1645,7 @@ export default defineContentScript({
       }
 
       // From XHR interceptor (MAIN world) — events
-      if (!event.data?.__miaosha) return;
+      if (!event.data?.[MSG_EVT]) return;
       const { type, payload } = event.data;
 
       if (type === 'PRODUCT_SELECTION_CHANGED' && payload) {
@@ -1450,22 +1674,15 @@ export default defineContentScript({
       }
 
       if (type === 'BATCH_MODE_STATUS') {
-        if (payload?.active) {
-          createForceStopBanner({
-            getTicketCount: async () => (await getTicketInfo()).count,
-            onFire: () => prefireAndBurst(Date.now(), 'batch-banner'),
-            onBurst: () => prefireAndBurst(Date.now(), 'batch-burst'),
-          });
-        } else {
-          removeForceStopBanner();
-        }
+        // Force-stop banner disabled — OCR status shown in overlay instead
+        removeForceStopBanner();
       }
     });
 
     // ── Listen for commands from popup ──
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg.type === 'PRODUCE_CAPTCHA') {
-        window.postMessage({ __miaosha_cmd: true, type: 'PRODUCE_CAPTCHA' }, '*');
+        window.postMessage({ [MSG_CMD]: true, type: 'PRODUCE_CAPTCHA' }, '*');
         sendResponse({ ok: true });
       }
       if (msg.type === 'GET_TICKET_COUNT') {

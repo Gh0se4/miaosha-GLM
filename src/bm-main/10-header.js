@@ -10,8 +10,8 @@
 // listener, CSS, and DOM elements. The overlay's Preparations/Runtime
 // cards no longer carry L1 fields (refactor scope per CLAUDE.md).
 
-var H1 = '__bm_h1';
-var H1_CSS_ID = '__bm_h1_css';
+var H1 = _NS + 'h1';
+var H1_CSS_ID = _NS + 'hc';
 
 // Local cached state (mirrors _rt in 02-state.js; we don't share the
 // same var because bm-main modules are concatenated into one IIFE
@@ -599,7 +599,7 @@ function _h1_updateTimeTick() {
 // ── Message handler ──
 function _h1_handleMessage(ev) {
   if (ev.source !== window) return;
-  if (!ev.data || !ev.data.__miaosha_overlay) return;
+  if (!ev.data || !ev.data[MSG_OVL]) return;
   var d = ev.data;
   if (d.type === 'RUNTIME_CALIBRATION' && d.data) {
     var lat = Number(d.data.latencyMs);
@@ -643,7 +643,7 @@ function _h1_setupOptionsClick() {
   var optsEl = document.getElementById('bmh-opts');
   if (!optsEl) return;
   optsEl.addEventListener('click', function () {
-    window.postMessage({ __miaosha_cmd: true, type: 'OPEN_OPTIONS_PAGE' }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'OPEN_OPTIONS_PAGE' }, '*');
   });
 }
 
@@ -652,7 +652,7 @@ function _h1_setupTestPayClick() {
   var testEl = document.getElementById('bmh-test');
   if (!testEl) return;
   testEl.addEventListener('click', function () {
-    window.postMessage({ __miaosha_cmd: true, type: 'TEST_NATIVE_PAYMENT', data: { payType: 'ALI' } }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'TEST_NATIVE_PAYMENT', data: { payType: 'ALI' } }, '*');
   });
 }
 
@@ -701,7 +701,7 @@ function _h1_injectHeader() {
 
   // Ask extension for sale time (overlay pattern)
   setTimeout(function () {
-    window.postMessage({ __miaosha_cmd: true, type: 'GET_SALE_TIME' }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'GET_SALE_TIME' }, '*');
   }, 800);
 }
 

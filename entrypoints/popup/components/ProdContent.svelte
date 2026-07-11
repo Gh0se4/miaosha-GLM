@@ -8,9 +8,9 @@
   <div class="launch-card">
     <div class="launch-icon">&#128640;</div>
     <div class="launch-title">智谱 Coding Plan</div>
-    <div class="launch-desc">打开智谱平台，开始秒杀准备</div>
+    <div class="launch-desc">打开智谱平台，开始抢购准备</div>
     <button class="launch-btn" onclick={openBigmodel}>
-      &#9654; 开始秒杀
+      &#9654; 开始抢购
     </button>
     <div class="launch-hint">在 bigmodel.cn 页面中使用 Captcha Pool 收集 tickets</div>
   </div>

@@ -9,7 +9,7 @@ function setupXhrInterception() {
           try {
             var d = JSON.parse(this.responseText);
             if (d.code === 200 && d.data && d.data.productList) {
-              sessionStorage.setItem('bm_batch_preview', JSON.stringify(d));
+              sessionStorage.setItem(_NS + SK_BP, JSON.stringify(d));
               updateProductMatrix(d.data.productList);
             }
           } catch(e){}

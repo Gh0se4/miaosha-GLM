@@ -105,16 +105,34 @@ function xhrRequestImpl<T>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
   });
 }
 
+// ── MAIN world fetch override ───────────────────────────────────────────
+// When set, xhrRequest routes ALL requests through the page's MAIN world
+// fetch instead of the extension's background service worker. This avoids
+// Alibaba WAF blocks on extension-origin requests to /api/biz/pay/preview.
+type MainWorldFetcher = (opts: XhrRequestOptions) => Promise<XhrResponse>;
+
+let _mwFetch: MainWorldFetcher | null = null;
+
+export function setMainWorldFetcher(fn: MainWorldFetcher | null) {
+  _mwFetch = fn;
+}
+
 /**
  * Perform an authenticated platform API request.
  *
- * The MAIN world fetches /api/biz/pay/batch-preview directly because Alibaba
- * WAF blocks extension-origin requests to that endpoint. For other platform
- * endpoints this helper still proxies through the service worker when running
- * inside the extension. Outside the extension context (tests) it falls back to
- * XHR.
+ * When a MAIN world fetcher is configured (set via setMainWorldFetcher),
+ * ALL requests are routed through the page's native fetch to avoid
+ * extension-origin WAF blocks. This is the preferred path for
+ * /api/biz/pay/preview (order endpoint).
+ *
+ * Without a MAIN world fetcher, extension-context requests are proxied
+ * through the background service worker. Outside the extension context
+ * (tests), falls back to direct XHR.
  */
 export function xhrRequest<T = unknown>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
+  if (_mwFetch) {
+    return _mwFetch(opts) as Promise<XhrResponse<T>>;
+  }
   if (isExtensionContext()) {
     return sendBackgroundRequest<T>(opts);
   }

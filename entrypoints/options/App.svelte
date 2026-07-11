@@ -23,7 +23,7 @@
       <div class="logo-orb"><div class="logo-icon">Z</div></div>
       <div class="brand-lockup">
         <span class="brand-zhipu">智谱</span>
-        <span class="brand-miaosha">秒杀助手</span>
+        <span class="brand-miaosha">抢购助手</span>
       </div>
       <span class="alpha-badge">Beta</span>
     </div>

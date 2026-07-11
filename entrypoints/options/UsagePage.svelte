@@ -1,6 +1,6 @@
 <script lang="ts">
   const MODE_ROWS = [
-    { name: 'Auto', meaning: '自动模式', behavior: '插件根据下一次秒杀时间自动倒计时，并在 saleTime - RTT/2 - 40ms 触发 strike()，你只需提前准备好验证码。' },
+    { name: 'Auto', meaning: '自动模式', behavior: '插件根据下一次抢购时间自动倒计时，并在 saleTime - RTT/2 - 40ms 触发 strike()，你只需提前准备好验证码。' },
     { name: 'Manual', meaning: '手动模式', behavior: '禁用自动倒计时，只有点击 FIRE 按钮才会发射；适合想自己把握时机测试或手动窗口。' },
   ];
 
@@ -17,7 +17,7 @@
     { outcome: '成功', code: '200 + bizId', subject: '智谱', target: '插件', cause: '锁单成功，返回 bizId', note: ' Fire Matrix 变绿，自动打开支付页。' },
     { outcome: '售罄', code: '200 sold-out', subject: '智谱', target: '插件', cause: '该商品今日库存已售罄', note: '继续打其他优先级商品。' },
     { outcome: '限流', code: '555', subject: '智谱', target: '当前用户', cause: '2 秒滑动窗口限流（阈值=1）', note: '建议提高 Burst Interval ≥2100ms。' },
-    { outcome: '验证码繁忙', code: '500', subject: '智谱', target: '腾讯验证码核销', cause: '超过《每秒并发请求量（QPS）限制》', note: '秒杀瞬间大量请求涌入腾讯云导致，非插件 bug。' },
+    { outcome: '验证码繁忙', code: '500', subject: '智谱', target: '腾讯验证码核销', cause: '超过《每秒并发请求量（QPS）限制》', note: '抢购瞬间大量请求涌入腾讯云导致，非插件 bug。' },
     { outcome: '验证码失效', code: '500', subject: '插件/用户', target: '腾讯验证码核销', cause: 'ticket 无效或已过期', note: '请重新录入验证码。' },
     { outcome: '验证码风控', code: '500', subject: '腾讯验证码风控', target: '当前请求', cause: '环境存在安全风险', note: '尝试刷新页面或更换浏览器环境。' },
     { outcome: '网络错误', code: '0 / network', subject: '插件/网络', target: '智谱', cause: '请求未到达服务端或连接超时', note: '检查网络或稍后重试。' },
