@@ -288,9 +288,8 @@ function injectOverlay() {
     var authReady = hasCookie && hasUser;
     if (authReady && !wasAuthReady) {
       // Auth just became ready: event-driven product refresh, no independent polling.
-      renderProductsLoading();
+      // Passive only: use page's own batch-preview data, never fetch
       loadBatchPreviewFromCache();
-      if (_productLoadStatus.status !== 'loaded') loadProducts(true);
 
       var totalProducts = 0;
       try {
