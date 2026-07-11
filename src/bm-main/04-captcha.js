@@ -102,7 +102,9 @@ function autoClickCaptcha() {
       }
       window.addEventListener('message', handler);
       setTimeout(function() { window.removeEventListener('message', handler); }, 15000);
-      cmdToOverlay('OCR_SOLVE_URL', { reqId: reqId, url: bgUrl });
+      // Pass caption text as remark for better OCR accuracy
+      var remark = headerText ? (headerText.textContent || '').replace('请依次点击：', '').replace(/\s+/g, '') : '';
+      cmdToOverlay('OCR_SOLVE_URL', { reqId: reqId, url: bgUrl, remark: remark });
       return;
     }
 

@@ -1562,7 +1562,7 @@ export default defineContentScript({
             });
             // dataUrl is "data:image/png;base64,..." — strip prefix
             const b64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-            const resp = await fetch('http://127.0.0.1:18765/solve', {
+            const resp = await fetch('http://127.0.0.1:9898/solve', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ image: b64 })
@@ -1596,10 +1596,11 @@ export default defineContentScript({
             });
 
             console.log('[OCR-ISO] calling ocr server, image size:', imgW + 'x' + imgH);
-            const ocrResp = await fetch('http://127.0.0.1:18765/solve', {
+            const remark = event.data.data.remark || '';
+            const ocrResp = await fetch('http://127.0.0.1:9898/solve', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: b64 })
+              body: JSON.stringify({ image: b64, remark: remark })
             });
             const result = await ocrResp.json();
             console.log('[OCR-ISO] ocr result:', JSON.stringify(result));
@@ -1614,7 +1615,7 @@ export default defineContentScript({
           // Direct OCR proxy (for canvas-based captchas that ARE accessible)
           const imageB64 = event.data.image;
           try {
-            const resp = await fetch('http://127.0.0.1:18765/solve', {
+            const resp = await fetch('http://127.0.0.1:9898/solve', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ image: imageB64 })
@@ -1627,7 +1628,7 @@ export default defineContentScript({
         }
         if (event.data.type === 'OCR_CHECK') {
           try {
-            const resp = await fetch('http://127.0.0.1:18765/health');
+            const resp = await fetch('http://127.0.0.1:9898/health');
             const data = await resp.json();
             postToOverlay({ type: 'OCR_STATUS', available: !!(data && data.ok) });
           } catch {
