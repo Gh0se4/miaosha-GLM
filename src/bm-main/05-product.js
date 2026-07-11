@@ -312,103 +312,35 @@ var _productLoadAbortController = null;
 
 function loadProducts(force) {
   if (!force && _productLoadStatus.status === 'loaded') return;
-  if (!force && _productLoadStatus.status === 'loading') return;
 
-  // Reuse data captured by the page's own fetch wrapper (bm-early.js).
-  if (!force && window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
+  // NEVER make our own batch-preview call — it triggers 555 rate limit
+  // and the page's call will also fail. The page calls batch-preview
+  // naturally; our XHR/fetch interceptors (03-xhr.js / bm-early.js)
+  // capture the response and update the product matrix automatically.
+
+  // Check if data already captured by page interceptors
+  if (window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
     _productLoadStatus.status = 'loaded';
     _productLoadStatus.error = '';
     _authFailed = false;
-    logAttempt(0, 'loaded-from-page-fetch', 'productList=' + window[_NS + "pd"].length);
     updateProductMatrix(window[_NS + "pd"]);
+    try {
+      sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: window[_NS + "pd"] } }));
+    } catch(e) {}
     return;
   }
 
-  _productLoadStatus.status = 'loading';
-  _productLoadStatus.error = '';
-  _productLoadStatus.attempt = 0;
-
-  var auth = getLocalAuthHeaders();
-  if (!auth) {
+  // Check auth — if missing, show auth error
+  if (!hasLocalAuthSignals()) {
     _productLoadStatus.status = 'error';
     _productLoadStatus.error = 'auth-missing';
     renderProductsAuthError();
     return;
   }
 
+  // Data not yet available — show loading and wait for page interceptors
+  _productLoadStatus.status = 'idle';
   if (!getVisibleProducts().length) renderProductsLoading();
-
-  // Poll for page data instead of making our own API call.
-  // The page's JS calls batch-preview naturally; we just wait.
-  // This avoids triggering the rate limit (555) that happens
-  // when both the page and the extension call batch-preview.
-  var pollStart = Date.now();
-  var MAX_POLL_MS = 30000;
-  var POLL_INTERVAL_MS = 2000;
-
-  function logAttempt(attempt, outcome, detail) {
-    try {
-      var entries = JSON.parse(sessionStorage.getItem(_NS + SK_PL) || '[]');
-      if (!Array.isArray(entries)) entries = [];
-      entries.push({ ts: Date.now(), attempt: attempt, outcome: outcome, detail: detail || '' });
-      if (entries.length > 20) entries = entries.slice(-20);
-      sessionStorage.setItem(_NS + SK_PL, JSON.stringify(entries));
-    } catch(e) {}
-  }
-
-  function markLoaded(productList) {
-    _productLoadStatus.status = 'loaded';
-    _productLoadStatus.error = '';
-    _productLoadStatus.attempt = 0;
-    _authFailed = false;
-    try {
-      sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: productList } }));
-    } catch(e) {}
-    logAttempt(0, 'loaded', 'productList=' + productList.length);
-    updateProductMatrix(productList);
-  }
-
-  function pollForPageData() {
-    if (window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
-      markLoaded(window[_NS + "pd"]);
-      return;
-    }
-    if (Date.now() - pollStart < MAX_POLL_MS) {
-      setTimeout(pollForPageData, POLL_INTERVAL_MS);
-      return;
-    }
-    // After 30s timeout, make one last-resort fetch ourselves
-    var doFetch = window.fetch;
-    var authValue = (auth.authorization || '').replace(/^Bearer\s+/i, '');
-    doFetch('https://bigmodel.cn/api/biz/pay/batch-preview', {
-      method: 'POST', credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'accept': 'application/json, text/plain, */*',
-        'authorization': authValue,
-        'bigmodel-organization': auth.bigmodelOrganization,
-        'bigmodel-project': auth.bigmodelProject
-      },
-      body: '{"invitationCode":""}'
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (d.code === 200 && d.data && Array.isArray(d.data.productList) && d.data.productList.length > 0) {
-          markLoaded(d.data.productList);
-        } else if (d.code === 1001) {
-          _authFailed = true;
-          renderProductsAuthError();
-        } else {
-          logAttempt(1, 'last-resort-fail', 'code=' + (d.code || 'unknown'));
-          handleBatchPreviewError('server-code-' + (d.code || 'unknown'));
-        }
-      })
-      .catch(function(err) {
-        logAttempt(1, 'last-resort-err', err.message);
-        handleBatchPreviewError(err.message);
-      });
-  }
-
-  setTimeout(pollForPageData, 2000);
 }
 function fetchBatchPreview() {
   loadProducts();
