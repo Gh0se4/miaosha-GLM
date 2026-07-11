@@ -209,27 +209,28 @@ function produceCaptcha() {
         console.log('[OCR] captcha ready, starting auto-solve...');
         postToOverlay('OCR_STATUS', { step: 'captcha-ready' });
         autoClickCaptcha();
-        // Watch for errors/refresh and retry
+        // Only watch for retry if OCR is enabled
+        var toggle = document.getElementById('_ocrToggle');
+        if (!toggle || !toggle.checked) return;
         var bgUrl = null;
         var vbg = document.querySelector('.tencent-captcha-dy__verify-bg-img');
         if (vbg) bgUrl = getComputedStyle(vbg).backgroundImage;
         var retries = 0;
         var retryTimer = setInterval(function() {
+          // Re-check toggle in case user turned it off
+          var t = document.getElementById('_ocrToggle');
+          if (!t || !t.checked) { clearInterval(retryTimer); return; }
           var errIcon = document.querySelector('.tencent-captcha-dy__network-status-icon--error');
           var errVisible = errIcon && getComputedStyle(errIcon).display !== 'none';
-          // Also detect captcha refresh (bg image changed after error)
           var newBg = vbg ? getComputedStyle(vbg).backgroundImage : null;
           var bgChanged = (bgUrl && newBg && bgUrl !== newBg);
           if (errVisible || bgChanged) {
             retries++;
             console.log('[OCR] captcha refresh/error, retry #' + retries + (errVisible?' (error)':' (refresh)'));
-            bgUrl = newBg; // track new background
+            bgUrl = newBg;
             postToOverlay('OCR_STATUS', { step: 'retry-' + retries });
             autoClickCaptcha();
-            if (retries >= 5) {
-              clearInterval(retryTimer);
-              postToOverlay('OCR_STATUS', { step: 'max-retries' });
-            }
+            if (retries >= 5) { clearInterval(retryTimer); }
           }
         }, 2000);
         setTimeout(function() { clearInterval(retryTimer); }, 120000);
