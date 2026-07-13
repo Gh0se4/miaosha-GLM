@@ -1413,13 +1413,19 @@ export default defineContentScript({
             if (options.enableBusyBackoff && outcome === 'busy') {
               consecutiveBusy++;
               postToOverlay({ type: 'FIRE_RESULT', line: `> 555 #${consecutiveBusy}: next interval ~${Math.round(currentInterval * (consecutiveBusy >= 2 ? 2 : 1.2)/1000)}s` });
+            } else if (outcome === 'error') {
+              // WAF or unknown error — stop entirely to avoid wasting tickets
+              cancelAll();
+              postToOverlay({ type: 'FIRE_RESULT', line: '> ⛔ WAF拦截或错误响应 — 已停火，请暂停后重试' });
+              postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
+              return;
             } else if (outcome === 'neterr') {
               // Network error — brief pause then retry
               consecutiveBusy = 0;
               currentInterval = Math.max(burstIntervalMs, 3000);
               postToOverlay({ type: 'FIRE_RESULT', line: '> network error — resuming in 3s' });
             } else {
-              // success or error — reset backoff
+              // success — reset backoff
               consecutiveBusy = 0;
               currentInterval = burstIntervalMs;
             }
