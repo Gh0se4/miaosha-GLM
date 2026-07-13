@@ -1684,6 +1684,7 @@ export default defineContentScript({
             _ticketPool.splice(0, _ticketPool.length - TICKET_POOL_MAX);
           }
           writePageTicketStore();
+          postToOverlay({ type: 'FIRE_RESULT', line: `> 🎫 ticket #${_ticketPool.length} acquired (${_ticketPool.length}/${TICKET_POOL_MAX})` });
         }
         const info = await getTicketInfo();
         postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });

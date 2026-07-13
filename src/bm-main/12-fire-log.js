@@ -100,7 +100,7 @@ var _log_shotSeq = 0;
 
     if (d.type === 'FIRE_BATCH_START' && d.data) {
       _log_waveCount++;
-      _log_addLine('▶ Wave ' + _log_waveCount + ' · ' + (d.data.totalShots || 0) + ' shots', '#6366f1');
+      _log_addLine('▶ Strike #' + _log_waveCount + ' · ' + (d.data.totalShots || 0) + ' shots · tickets in pool: ' + (_ticketCount||'?'), '#6366f1');
       var cfg = {
         mode: d.data.mode || 'manual',
         burstIntervalMs: d.data.burstIntervalMs || 0,
@@ -150,6 +150,10 @@ var _log_shotSeq = 0;
       _log_addLine(line, outcomeColor);
     }
 
+    if (d.type === 'FIRE_RESULT' && d.line && d.line.indexOf('Cancelled') !== -1) {
+      _log_addLine('⊘ ' + d.line, '#d97706');
+    }
+
     if (d.type === 'BURST_FIRE_DEPLETED') {
       var tot = (d.data && d.data.total) || 0;
       _log_addLine('⊘ Depleted — ' + tot + ' shots, no order', '#dc2626');
@@ -167,6 +171,14 @@ var _log_shotSeq = 0;
 
     if (d.type === 'PREFIRE_STATUS' && d.data && !d.data.ok) {
       _log_addLine('⊘ Prefire blocked: ' + (d.data.reason || 'unknown'), '#dc2626');
+    }
+
+    // Track captcha acquisition events for WAF timing analysis
+    if (d.type === 'TICKET_COUNT') {
+      // Logged via FIRE_RESULT above, handled by overlay
+    }
+    if (d.type === 'CAPTCHA_PRODUCED' && d.data) {
+      _log_addLine('🎫 captcha solved · total pool: ' + (d.data.total || '?'), '#10b981');
     }
   });
 
