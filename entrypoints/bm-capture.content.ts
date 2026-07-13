@@ -1192,9 +1192,9 @@ export default defineContentScript({
         return;
       }
 
-      // Consume all tickets used in this strike.
-      const usedKeys = new Set(plan.shots.map((s) => s.ticket + ':' + s.randstr + ':' + s.createdAt));
-      _ticketPool = _ticketPool.filter((t: any) => !usedKeys.has(t.ticket + ':' + t.randstr + ':' + t.createdAt));
+      // Reserve all tickets for this strike (will be released on cancel/expiry)
+      const reservedKeys = new Set(plan.shots.map((s) => s.ticket + ':' + s.randstr + ':' + s.createdAt));
+      _ticketPool = _ticketPool.filter((t: any) => !reservedKeys.has(t.ticket + ':' + t.randstr + ':' + t.createdAt));
       writePageTicketStore();
       const remainingInfo = await getTicketInfo();
       postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, tickets: remainingInfo.tickets });
@@ -1231,6 +1231,14 @@ export default defineContentScript({
         previewAbortCtrl.abort();
         for (const id of timers) clearTimeout(id);
         timers.length = 0;
+        // Return unused reserved tickets back to pool
+        const usedShotIdx = shotIdx; // how many shots already fired
+        for (let j = usedShotIdx; j < plan.shots.length; j++) {
+          const s = plan.shots[j];
+          _ticketPool.push({ ticket: s.ticket, randstr: s.randstr, createdAt: s.createdAt });
+        }
+        writePageTicketStore();
+        postToOverlay({ type: 'FIRE_RESULT', line: `> Cancelled — returned ${plan.shots.length - usedShotIdx} unused tickets` });
       };
 
       // Cancel any previous manual sequence before starting a new one.
@@ -1393,6 +1401,7 @@ export default defineContentScript({
 
         timers.push(
           setTimeout(async () => {
+            try {
             const outcome = await fireOne(shot, idx);
             if (outcome === 'soldout') {
               // Sold out — fire next shot immediately (product may have changed)
@@ -1416,6 +1425,10 @@ export default defineContentScript({
             }
 
             scheduleNext();
+            } catch (err: any) {
+              postToOverlay({ type: 'FIRE_RESULT', line: `> Shot error: ${err?.message || 'unknown'}` });
+              scheduleNext(); // keep chain alive
+            }
           }, delay),
         );
       };
