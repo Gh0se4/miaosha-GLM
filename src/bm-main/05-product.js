@@ -312,25 +312,18 @@ var _productLoadAbortController = null;
 
 function loadProducts(force) {
   if (!force && _productLoadStatus.status === 'loaded') return;
+  if (!force && _productLoadStatus.status === 'polling') return;
 
-  // NEVER make our own batch-preview call — it triggers 555 rate limit
-  // and the page's call will also fail. The page calls batch-preview
-  // naturally; our XHR/fetch interceptors (03-xhr.js / bm-early.js)
-  // capture the response and update the product matrix automatically.
-
-  // Check if data already captured by page interceptors
+  // Already have data from page interceptors
   if (window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
     _productLoadStatus.status = 'loaded';
     _productLoadStatus.error = '';
     _authFailed = false;
     updateProductMatrix(window[_NS + "pd"]);
-    try {
-      sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: window[_NS + "pd"] } }));
-    } catch(e) {}
+    try { sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: window[_NS + "pd"] } })); } catch(e) {}
     return;
   }
 
-  // Check auth — if missing, show auth error
   if (!hasLocalAuthSignals()) {
     _productLoadStatus.status = 'error';
     _productLoadStatus.error = 'auth-missing';
@@ -338,9 +331,25 @@ function loadProducts(force) {
     return;
   }
 
-  // Data not yet available — show loading and wait for page interceptors
-  _productLoadStatus.status = 'idle';
+  // No data yet — show loading and poll for page interceptors
   if (!getVisibleProducts().length) renderProductsLoading();
+  _productLoadStatus.status = 'polling';
+
+  var pollStart = Date.now();
+  function poll() {
+    if (window[_NS + "pd"] && window[_NS + "pd"].length > 0) {
+      _productLoadStatus.status = 'loaded';
+      _productLoadStatus.error = '';
+      _authFailed = false;
+      updateProductMatrix(window[_NS + "pd"]);
+      try { sessionStorage.setItem(_NS + SK_BP, JSON.stringify({ code: 200, data: { productList: window[_NS + "pd"] } })); } catch(e) {}
+      return;
+    }
+    if (Date.now() - pollStart < 60000) {
+      setTimeout(poll, 2000);
+    }
+  }
+  setTimeout(poll, 2000);
 }
 function fetchBatchPreview() {
   loadProducts();
