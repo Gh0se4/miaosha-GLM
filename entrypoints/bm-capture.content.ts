@@ -1401,7 +1401,6 @@ export default defineContentScript({
 
         timers.push(
           setTimeout(async () => {
-            try {
             const outcome = await fireOne(shot, idx);
             if (outcome === 'soldout') {
               // Sold out — fire next shot immediately (product may have changed)
@@ -1431,10 +1430,6 @@ export default defineContentScript({
             }
 
             scheduleNext();
-            } catch (err: any) {
-              postToOverlay({ type: 'FIRE_RESULT', line: `> Shot error: ${err?.message || 'unknown'}` });
-              scheduleNext(); // keep chain alive
-            }
           }, delay),
         );
       };
