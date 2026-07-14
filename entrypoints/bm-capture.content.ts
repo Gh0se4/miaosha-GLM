@@ -1241,8 +1241,11 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: `> Cancelled — returned ${plan.shots.length - usedShotIdx} unused tickets` });
       };
 
-      // Cancel any previous manual sequence before starting a new one.
-      if (currentStrikeCancel) currentStrikeCancel();
+      // Prevent concurrent strikes — block re-fire while active
+      if (currentStrikeCancel) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
+        return;
+      }
       currentStrikeCancel = cancelAll;
 
       const total = plan.shots.length;
@@ -1367,6 +1370,9 @@ export default defineContentScript({
       let currentInterval = burstIntervalMs;
       let consecutiveBusy = 0;
       let shotIdx = 0;
+      let shotsInBurst = 0;
+      const BURST_LIMIT = 6; // auto-pause after this many shots
+      const BURST_COOLDOWN_MS = 35000; // 35s cooldown between bursts
 
       const scheduleNext = () => {
         if (cancelled || succeeded || shotIdx >= total) {
@@ -1381,22 +1387,27 @@ export default defineContentScript({
         const shot = plan.shots[shotIdx];
         const idx = shotIdx;
         shotIdx++;
+        shotsInBurst++;
 
         // Smart interval calculation
         let delay = currentInterval;
         if (shotIdx === 1) {
-          delay = Math.max(0, startMs - Date.now()); // first shot: fire immediately
+          delay = Math.max(0, startMs - Date.now());
+        } else if (shotsInBurst > BURST_LIMIT) {
+          // Automatic burst cooldown to avoid WAF pattern detection
+          delay = BURST_COOLDOWN_MS + Math.floor(Math.random() * 15000);
+          shotsInBurst = 0;
+          consecutiveBusy = 0;
+          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ auto-cooldown: ${Math.round(delay/1000)}s pause after ${BURST_LIMIT} shots to avoid WAF` });
         } else if (consecutiveBusy >= 4) {
-          // Penalty box: 4+ consecutive 555s → pause 30-60 seconds
           delay = 30000 + Math.floor(Math.random() * 30000);
+          shotsInBurst = 0;
+          consecutiveBusy = 0;
           postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ penalty box: ${Math.round(delay/1000)}s cooldown after ${consecutiveBusy} consecutive 555s` });
-          consecutiveBusy = 0; // reset counter after cooldown
         } else if (consecutiveBusy >= 2) {
-          // Exponential backoff: double interval for each additional 555
           delay = Math.min(20000, currentInterval * (1 << Math.min(consecutiveBusy - 1, 4)));
         }
-        // Add random jitter ±25% and ensure minimum 3s gap
-        const jitter = 0.75 + Math.random() * 0.5; // 0.75x ~ 1.25x
+        const jitter = 0.75 + Math.random() * 0.5;
         delay = Math.round(Math.max(3000, delay * jitter));
 
         timers.push(
