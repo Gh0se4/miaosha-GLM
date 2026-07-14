@@ -1367,16 +1367,15 @@ export default defineContentScript({
       };
 
       
-      let currentInterval = burstIntervalMs;
-      let consecutiveBusy = 0;
       let shotIdx = 0;
       let shotsInBurst = 0;
-      const BURST_LIMIT = 6; // auto-pause after this many shots
-      const BURST_COOLDOWN_MS = 35000; // 35s cooldown between bursts
+      const BURST_LIMIT = 5;
+      const BURST_COOLDOWN_MS = 40000;
+      let wafBlocked = false;
 
       const scheduleNext = () => {
-        if (cancelled || succeeded || shotIdx >= total) {
-          if (!succeeded && !cancelled) {
+        if (cancelled || succeeded || wafBlocked || shotIdx >= total) {
+          if (!succeeded && !cancelled && !wafBlocked) {
             cancelAll();
             postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ammo depleted (${total} shots)` });
             postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
@@ -1389,57 +1388,38 @@ export default defineContentScript({
         shotIdx++;
         shotsInBurst++;
 
-        // Smart interval calculation
-        let delay = currentInterval;
+        // Simple interval: first shot immediate, then fixed + jitter
+        let delay = burstIntervalMs;
         if (shotIdx === 1) {
           delay = Math.max(0, startMs - Date.now());
         } else if (shotsInBurst > BURST_LIMIT) {
-          // Automatic burst cooldown to avoid WAF pattern detection
-          delay = BURST_COOLDOWN_MS + Math.floor(Math.random() * 15000);
+          delay = BURST_COOLDOWN_MS + Math.floor(Math.random() * 20000);
           shotsInBurst = 0;
-          consecutiveBusy = 0;
-          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ auto-cooldown: ${Math.round(delay/1000)}s pause after ${BURST_LIMIT} shots to avoid WAF` });
-        } else if (consecutiveBusy >= 4) {
-          delay = 30000 + Math.floor(Math.random() * 30000);
-          shotsInBurst = 0;
-          consecutiveBusy = 0;
-          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ penalty box: ${Math.round(delay/1000)}s cooldown after ${consecutiveBusy} consecutive 555s` });
-        } else if (consecutiveBusy >= 2) {
-          delay = Math.min(20000, currentInterval * (1 << Math.min(consecutiveBusy - 1, 4)));
+          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ cooldown ${Math.round(delay/1000)}s (${BURST_LIMIT} shots sent)` });
         }
-        const jitter = 0.75 + Math.random() * 0.5;
-        delay = Math.round(Math.max(3000, delay * jitter));
+        delay = Math.round(delay * (0.8 + Math.random() * 0.4));
 
         timers.push(
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
             if (outcome === 'soldout') {
-              // Sold out — fire next shot immediately (product may have changed)
-              consecutiveBusy = 0;
-              currentInterval = burstIntervalMs;
               scheduleNext();
               return;
             }
-            if (options.enableBusyBackoff && outcome === 'busy') {
-              consecutiveBusy++;
-              postToOverlay({ type: 'FIRE_RESULT', line: `> 555 #${consecutiveBusy}: next interval ~${Math.round(currentInterval * (consecutiveBusy >= 2 ? 2 : 1.2)/1000)}s` });
-            } else if (outcome === 'error') {
-              // WAF or unknown error — stop entirely to avoid wasting tickets
+            if (outcome === 'error') {
+              // WAF block: stop and start recovery timer
+              wafBlocked = true;
               cancelAll();
-              postToOverlay({ type: 'FIRE_RESULT', line: '> ⛔ WAF拦截或错误响应 — 已停火，请暂停后重试' });
+              postToOverlay({ type: 'FIRE_RESULT', line: '> ⛔ WAF blocked — 2min cooldown, then you can retry' });
               postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
+              // Auto-reset wafBlocked after 2 minutes so user can retry
+              postToOverlay({ type: 'WAF_COOLDOWN', seconds: 120 });
+              setTimeout(() => { wafBlocked = false; postToOverlay({ type: 'WAF_COOLDOWN', seconds: 0 }); }, 120000);
               return;
-            } else if (outcome === 'neterr') {
-              // Network error — brief pause then retry
-              consecutiveBusy = 0;
-              currentInterval = Math.max(burstIntervalMs, 3000);
-              postToOverlay({ type: 'FIRE_RESULT', line: '> network error — resuming in 3s' });
-            } else {
-              // success — reset backoff
-              consecutiveBusy = 0;
-              currentInterval = burstIntervalMs;
             }
-
+            if (outcome === 'busy') {
+              postToOverlay({ type: 'FIRE_RESULT', line: `> 555 (${shotIdx}/${total})` });
+            }
             scheduleNext();
           }, delay),
         );
