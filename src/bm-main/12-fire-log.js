@@ -157,16 +157,12 @@ var _log_shotSeq = 0;
     if (d.type === 'BURST_FIRE_DEPLETED') {
       var tot = (d.data && d.data.total) || 0;
       _log_addLine('⊘ Depleted — ' + tot + ' shots, no order', '#dc2626');
-      _log_addLine('  Log: ' + _log_entries.length + ' entries. Auto-downloading...', '#94a3b8');
-      // Auto-download log file so it survives tab close / browser restart
-      setTimeout(function() { downloadLog(); }, 500);
+      _log_addLine('  Log: ' + _log_entries.length + ' entries. Click JSON button to download.', '#94a3b8');
     }
 
     if (d.type === 'BURST_FIRE_SUCCESS' && d.data) {
       var biz = d.data.bizId ? String(d.data.bizId).slice(-8) : '?';
       _log_addLine('✔ ORDER SUCCESS · bizId=' + biz, '#059669');
-      // Auto-download on success too
-      setTimeout(function() { downloadLog(); }, 1000);
     }
 
     if (d.type === 'PREFIRE_STATUS' && d.data && !d.data.ok) {
