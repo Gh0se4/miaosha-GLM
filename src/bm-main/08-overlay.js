@@ -3,7 +3,7 @@ function buildHTML() {
   return '<style>' + CSS + '</style>' +
 
     // Header
-    '<div class="h"><span>&#128736;</span><h3>抢购助手</h3><span class="ver">v1.4.3</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
+    '<div class="h"><span>&#128736;</span><h3>抢购助手</h3><span class="ver">v1.5.0</span><button class="opts" id="_opts" title="Open options">&#9881;</button><button class="mn" id="_mn">&#8722;</button></div>' +
     '<div class="b" id="_bd">' +
 
     // Card 1: Preparations
@@ -182,6 +182,10 @@ function injectOverlay() {
           el.style.color = '#059669'; el.textContent = '🤖 OCR 已识别';
         } else if (step.indexOf('found') !== -1) {
           el.style.color = '#6366f1'; el.textContent = '🔍 ' + step;
+        } else if (step.indexOf('manual-needed') !== -1) {
+          el.style.color = '#dc2626'; el.textContent = '⚠️ OCR 连续失败 · 请手动完成验证码';
+        } else if (step.indexOf('ocr-fail') !== -1) {
+          el.style.color = '#d97706'; el.textContent = '⚠️ OCR 识别失败 (' + step.replace('ocr-fail-','') + '/3) · 重试中...';
         } else if (step.indexOf('slider') !== -1) {
           el.style.color = '#6366f1'; el.textContent = '👆 滑块验证码 · 请手动拖动滑块';
         } else if (step.indexOf('captcha-ready') !== -1) {

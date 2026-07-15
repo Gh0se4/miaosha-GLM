@@ -1,6 +1,6 @@
 {
   "name": "qianggou-GLM",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "Coding Plan 抢购助手浏览器扩展",
   "scripts": {
     "dev": "wxt",

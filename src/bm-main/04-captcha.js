@@ -1,64 +1,48 @@
 // ── OCR auto-solve (integrated from glm-plugin's proven logic) ──────────
-// Flow: captcha ready → extract bg image URL → new Image() load → canvas →
-// base64 → POST localhost:9898/solve → scale coords → click bgEl → confirm
-
 var _ocrBusy = false;
+var _ocrFailCount = 0;
 
 function autoClickCaptcha() {
-  // Check toggle
   var toggle = document.getElementById('_ocrToggle');
   if (!toggle || !toggle.checked) return;
   if (_ocrBusy) return;
 
-  // Detect captcha type
+  // After 3 consecutive failures, prompt manual intervention
+  if (_ocrFailCount >= 3) {
+    postToOverlay('OCR_STATUS', { step: 'manual-needed' });
+    return;
+  }
+
   var headerEl = document.querySelector('.tencent-captcha-dy__header-text');
   var headerText = headerEl ? headerEl.textContent.trim() : '';
   if (headerText.indexOf('拖动') !== -1 || headerText.indexOf('拼图') !== -1) {
-    console.log('[OCR] slider captcha, skip');
+    _ocrFailCount++;
     postToOverlay('OCR_STATUS', { step: 'slider-manual' });
     return;
   }
-  if (headerText.indexOf('点击') === -1) {
-    console.log('[OCR] unknown captcha type:', headerText);
-    return;
-  }
+  if (headerText.indexOf('点击') === -1) return;
 
-  // Check for errors (glm-plugin pattern)
   var errorIcon = document.querySelector('.tencent-captcha-dy__network-status-icon--error');
   if (errorIcon && getComputedStyle(errorIcon).display !== 'none') {
-    console.log('[OCR] captcha error, waiting...');
     setTimeout(autoClickCaptcha, 500);
     return;
   }
 
-  // Find the captcha background image (glm-plugin's approach)
   var bgEl = document.querySelector('.tencent-captcha-dy__verify-bg-img');
-  if (!bgEl) {
-    console.log('[OCR] no verify-bg-img');
-    setTimeout(autoClickCaptcha, 500);
-    return;
-  }
+  if (!bgEl) { setTimeout(autoClickCaptcha, 500); return; }
 
   var bgStyle = getComputedStyle(bgEl).backgroundImage;
-  if (!bgStyle || bgStyle === 'none') {
-    console.log('[OCR] no background image');
-    setTimeout(autoClickCaptcha, 500);
-    return;
-  }
+  if (!bgStyle || bgStyle === 'none') { setTimeout(autoClickCaptcha, 500); return; }
 
   var match = bgStyle.match(/url\(["']?(.*?)["']?\)/);
-  if (!match || !match[1]) {
-    console.log('[OCR] cannot parse bg URL');
-    return;
-  }
+  if (!match || !match[1]) return;
 
   var bgUrl = match[1];
   var captionChars = headerText.split('：')[1] ? headerText.split('：')[1].trim().split(/\s+/) : [];
   _ocrBusy = true;
+  _ocrFailCount = 0;
   postToOverlay('OCR_STATUS', { step: 'solving ' + captionChars.join('') });
-  console.log('[OCR] captcha image:', bgUrl.substring(0, 80), 'chars:', captionChars.join(''));
 
-  // Load image via new Image() — same as glm-plugin, avoids CORS issues
   var img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = function() {
@@ -70,7 +54,6 @@ function autoClickCaptcha() {
       ctx.drawImage(img, 0, 0);
       var b64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
 
-      // Send to local OCR server (glm-plugin's exact API)
       fetch('http://127.0.0.1:9898/solve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -78,19 +61,19 @@ function autoClickCaptcha() {
       })
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        console.log('[OCR] result:', JSON.stringify(data));
         if (!data.success || !data.data || !data.data.result) {
-          console.log('[OCR] recognition failed');
+          _ocrFailCount++;
           _ocrBusy = false;
+          postToOverlay('OCR_STATUS', { step: 'ocr-fail-' + _ocrFailCount });
           return;
         }
 
+        _ocrFailCount = 0;
         var points = data.data.result.split('|').map(function(p) {
           var xy = p.split(',');
           return { x: parseFloat(xy[0]), y: parseFloat(xy[1]) };
         });
 
-        // glm-plugin: scale coordinates from image size to display size
         var rect = bgEl.getBoundingClientRect();
         var scaleW = rect.width / img.naturalWidth;
         var scaleH = rect.height / img.naturalHeight;
@@ -98,10 +81,9 @@ function autoClickCaptcha() {
         var idx = 0;
         function clickNext() {
           if (idx >= points.length) {
-            // All clicked — hit confirm button
             setTimeout(function() {
               var btn = document.querySelector('.tencent-captcha-dy__verify-confirm-btn');
-              if (btn) { btn.click(); console.log('[OCR] confirm clicked'); }
+              if (btn) { btn.click(); }
               _ocrBusy = false;
               postToOverlay('OCR_STATUS', { step: 'done' });
             }, 300);
@@ -109,29 +91,18 @@ function autoClickCaptcha() {
           }
           var sx = rect.left + points[idx].x * scaleW;
           var sy = rect.top + points[idx].y * scaleH;
-          // glm-plugin: dispatch on bgEl directly
           ['mousedown', 'mouseup', 'click'].forEach(function(type) {
             bgEl.dispatchEvent(new MouseEvent(type, { clientX: sx, clientY: sy, bubbles: true, cancelable: true, view: window }));
           });
-          console.log('[OCR] click ' + (idx+1) + '/' + points.length + ' at ' + Math.round(sx) + ',' + Math.round(sy));
           idx++;
           setTimeout(clickNext, 400);
         }
         clickNext();
       })
-      .catch(function(e) {
-        console.log('[OCR] fetch error:', e.message);
-        _ocrBusy = false;
-      });
-    } catch(e) {
-      console.log('[OCR] image error:', e.message);
-      _ocrBusy = false;
-    }
+      .catch(function() { _ocrFailCount++; _ocrBusy = false; });
+    } catch(e) { _ocrFailCount++; _ocrBusy = false; }
   };
-  img.onerror = function() {
-    console.log('[OCR] image load failed');
-    _ocrBusy = false;
-  };
+  img.onerror = function() { _ocrFailCount++; _ocrBusy = false; };
   img.src = bgUrl;
 }
 
