@@ -1161,18 +1161,13 @@ export default defineContentScript({
 
       
       let shotIdx = 0;
-      let shotsInBurst = 0;
-      const BURST_LIMIT = 5;
-      const BURST_COOLDOWN_MS = 40000;
-      let wafCount = 0;
-      const MAX_WAF_RETRIES = 3;
-      const WAF_COOLDOWN_MS = 120000; // 2 min
+      const MIN_GAP_MS = 3000;
 
       const scheduleNext = () => {
         if (cancelled || succeeded || shotIdx >= total) {
           if (!succeeded && !cancelled) {
             cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ammo depleted (${total} shots)` });
+            postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ${total} shots, ${shotIdx} sent` });
             postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
           }
           return;
@@ -1181,56 +1176,20 @@ export default defineContentScript({
         const shot = plan.shots[shotIdx];
         const idx = shotIdx;
         shotIdx++;
-        shotsInBurst++;
 
-        // Simple interval: first shot immediate, then fixed + jitter
-        let delay = burstIntervalMs;
-        if (shotIdx === 1) {
-          delay = Math.max(0, startMs - Date.now());
-        } else if (shotsInBurst > BURST_LIMIT) {
-          delay = BURST_COOLDOWN_MS + Math.floor(Math.random() * 20000);
-          shotsInBurst = 0;
-          postToOverlay({ type: 'FIRE_RESULT', line: `> ⏸ cooldown ${Math.round(delay/1000)}s (${BURST_LIMIT} shots sent)` });
-        }
-        delay = Math.round(delay * (0.8 + Math.random() * 0.4));
+        let delay = shotIdx === 1 ? Math.max(0, startMs - Date.now()) : MIN_GAP_MS;
+        delay = Math.round(delay * (0.85 + Math.random() * 0.3));
 
         timers.push(
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
-            if (outcome === 'soldout') {
-              scheduleNext();
-              return;
-            }
-            if (outcome === 'error') {
-              wafCount++;
-              if (wafCount > MAX_WAF_RETRIES) {
-                cancelAll();
-                postToOverlay({ type: 'FIRE_RESULT', line: `> ⛔ WAF blocked ${wafCount} times — giving up` });
-                postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
-                return;
-              }
-              // WAF is normal during flash sales — pause then auto-retry
-              postToOverlay({ type: 'FIRE_RESULT', line: `> ⛔ WAF #${wafCount}/${MAX_WAF_RETRIES} — pausing ${WAF_COOLDOWN_MS/1000}s then retry` });
-              shotsInBurst = 0;
-              setTimeout(() => { scheduleNext(); }, WAF_COOLDOWN_MS);
-              return;
-            } else {
-              // Non-error response — reset WAF counter (session recovered)
-              if (wafCount > 0) {
-                postToOverlay({ type: 'FIRE_RESULT', line: '> ✅ WAF cooldown passed — resuming' });
-                wafCount = 0;
-              }
-            }
-            if (outcome === 'busy') {
-              postToOverlay({ type: 'FIRE_RESULT', line: `> 555 (${shotIdx}/${total})` });
-            }
-            if (outcome === 'neterr') {
-              postToOverlay({ type: 'FIRE_RESULT', line: `> ⏱ timeout (${shotIdx}/${total}) — no response, next shot` });
-            }
+            postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${shotIdx}/${total})` });
             scheduleNext();
           }, delay),
         );
       };
+
+      scheduleNext();
 
       scheduleNext();
     }
