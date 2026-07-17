@@ -2,7 +2,7 @@
 // Injects MAIN world XHR interceptor and relays payment/ticket data to WXT storage
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
-import { buildAutoFirePlan, type AutoFirePlanShot } from '../lib/api/fire-plan';
+import type { AutoFirePlanShot } from '../lib/api/fire-plan';
 import { buildStrikeQueue, type StrikeShot, type StrikeTarget } from '../lib/api/strike-plan';
 import { calibrate } from '../lib/api/runtime-calibration';
 import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
@@ -937,224 +937,17 @@ export default defineContentScript({
     }
 
     // ── Alpha Auto-Fire execution ────────────────────────────────────────────
-    function consumeReservedTickets(pool: any[], reservedTickets: Array<{ ticket: string; createdAt: number }>) {
-      if (reservedTickets.length === 0) return pool;
-      const reservedKeys = new Set(reservedTickets.map((ticket) => ticket.ticket + ':' + ticket.createdAt));
-      return pool.filter((ticket) => !reservedKeys.has(ticket.ticket + ':' + ticket.createdAt));
-    }
-
-    function describeShot(shot: AutoFirePlanShot, idx: number, total: number) {
-      const waveTag = shot.wave === 'initial' ? 'initial' : 'follow-up';
-      return '>[#' + (idx + 1) + '/' + total + '][' + waveTag + '] ' + shot.productId.slice(-6);
-    }
-
-    function queueFireTimers(
-      shots: AutoFirePlanShot[],
-      authArg: any,
-      timers: ReturnType<typeof setTimeout>[],
-      state: { succeeded: boolean },
-    ) {
-      const auth = coerceToPlatformAuth(authArg);
-      if (!auth) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
-        return () => {};
-      }
-
-      const total = shots.length;
-
-      const cancelAll = () => {
-        for (const id of timers) clearTimeout(id);
-      };
-
-      const fireOne = async (shot: AutoFirePlanShot, idx: number) => {
-        if (state.succeeded) return;
-        const t1 = Date.now();
-        try {
-          const result = await bigmodelAdapter.orderPipeline.run({
-            platform: 'bigmodel',
-            productId: shot.productId,
-            ticket: { ticket: shot.ticket, randstr: shot.randstr, provider: 'tencent-captcha', createdAt: shot.createdAt },
-          }, auth);
-          const rtt = Date.now() - t1;
-          const tag = describeShot(shot, idx, total);
-
-          if (result.success) {
-            const session = result.data!;
-            state.succeeded = true;
-            cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + session.bizId + ' (' + rtt + 'ms)' });
-            postToOverlay({
-              type: 'FIRE_SHOT_RESULT',
-              data: {
-                shotIdx: idx,
-                productId: shot.productId,
-                priority: 1,
-                wave: shot.wave,
-                outcome: 'success',
-                code: 200,
-                rtt,
-                sentAt: t1,
-                bizId: session.bizId,
-                ticketMask: maskTicket(shot.ticket),
-                serverMsg: '',
-              },
-            });
-            const ps = {
-              bizId: session.bizId as string,
-              amount: session.amount as number,
-              productId: session.productId as string,
-              status: 'pending' as const,
-              updatedAt: Date.now(),
-            };
-            void updatePaymentState(ps);
-            postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
-          } else if (result.metadata?.classified?.outcome === 'soldout') {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({
-              type: 'FIRE_SHOT_RESULT',
-              data: {
-                shotIdx: idx,
-                productId: shot.productId,
-                priority: 1,
-                wave: shot.wave,
-                outcome: 'soldout',
-                code: 200,
-                rtt,
-                sentAt: t1,
-                ticketMask: maskTicket(shot.ticket),
-                serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out',
-              },
-            });
-          } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({
-              type: 'FIRE_SHOT_RESULT',
-              data: {
-                shotIdx: idx,
-                productId: shot.productId,
-                priority: 1,
-                wave: shot.wave,
-                outcome: 'busy',
-                code: 555,
-                rtt,
-                sentAt: t1,
-                ticketMask: maskTicket(shot.ticket),
-                serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy',
-              },
-            });
-          } else {
-            const raw = result.metadata?.raw as { code?: number; msg?: string } | undefined;
-            const rawBody = result.metadata?.raw;
-            const rawBodyText = (result.metadata as any)?.rawBodyText || (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
-            const cls = rawBody ? classifyPreviewError(rawBody as any, rawBodyText) : {
-              outcome: (result.metadata?.classified as any)?.outcome || 'error',
-              code: (result.metadata?.classified as any)?.code || 500,
-              rawBody: getRawBody(result), serverMsg: result.error || 'unknown error',
-              rawServerMsg: rawBodyText || result.error || 'unknown error',
-              responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
-            };
-          }
-        } catch (e: any) {
-          const cls = neterrResponsibility(e?.message || 'unknown');
-          postToOverlay({ type: 'FIRE_RESULT', line: describeShot(shot, idx, total) + ': net-err: ' + cls.rawServerMsg });
-          postToOverlay({
-            type: 'FIRE_SHOT_RESULT',
-            data: {
-              shotIdx: idx,
-              productId: shot.productId,
-              priority: 1,
-              wave: shot.wave,
-              outcome: cls.outcome,
-              code: cls.code,
-              rtt: Date.now() - t1,
-              sentAt: t1,
-              ticketMask: maskTicket(shot.ticket),
-              rawBody: getRawBody(result), serverMsg: cls.serverMsg,
-              rawServerMsg: cls.rawServerMsg,
-              responsibility: cls.responsibility,
-            },
-          });
-        }
-      };
-
-      for (let i = 0; i < shots.length; i++) {
-        const shot = shots[i];
-        const idx = i;
-        const delay = Math.max(0, shot.scheduledAt - Date.now());
-        timers.push(setTimeout(() => { void fireOne(shot, idx); }, delay));
-      }
-
-      return cancelAll;
-    }
-
     async function runAutoFirePlan(startMs: number, authArg: any) {
       const { valid, selectedIds } = await getAutoFireSnapshot();
-      if (valid.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
-        return;
-      }
-      if (selectedIds.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> No products selected' });
-        return;
-      }
-
-      const plan = buildAutoFirePlan({ tickets: valid, selectedIds, startMs });
-      const allShots = [...plan.initialShots, ...plan.followUpShots];
-      if (allShots.length === 0) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-fire plan empty' });
-        return;
-      }
-
-      const remainingPool = consumeReservedTickets(valid, plan.reservedTickets);
-      _ticketPool = remainingPool;
-      writePageTicketStore();
-      const remainingInfo = await getTicketInfo();
-      postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, tickets: remainingInfo.tickets });
-
-      if (valid.length < selectedIds.length) {
-        postToOverlay({
-          type: 'FIRE_RESULT',
-          line: '> Auto initial partial: ' + valid.length + ' tickets for ' + selectedIds.length + ' selected products',
-        });
-      }
-
-      postToOverlay({
-        type: 'FIRE_RESULT',
-        line: '> Auto plan: initial ' + plan.initialShots.length + ' concurrent + follow-up ' + plan.followUpShots.length + ' randomized expiry-safe shots',
+      // Auto mode now uses the same sequential strike logic as manual mode.
+      // Key difference: starts firing at targetTime - 500ms for pre-fire advantage.
+      const targets: StrikeTarget[] = selectedIds.map((id, i) => ({ productId: id, priority: i + 1 }));
+      await runStrikeSequence(startMs - 500, authArg, {
+        label: 'Auto',
+        mode: 'auto',
+        enableBusyBackoff: false,
+        pollPayment: true,
       });
-
-      postToOverlay({
-        type: 'FIRE_BATCH_START',
-        data: {
-          queue: allShots.map((shot, idx) => ({
-            shotIdx: idx,
-            productId: shot.productId,
-            wave: shot.wave,
-            priority: 1,
-            scheduledAt: shot.scheduledAt,
-            ticketMask: maskTicket(shot.ticket),
-          })),
-          totalShots: allShots.length,
-          startMs,
-          initialCount: plan.initialShots.length,
-          followUpCount: plan.followUpShots.length,
-          mode: 'auto',
-          burstIntervalMs: 0,
-        },
-      });
-
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      const state = { succeeded: false };
-      const cancelAll = queueFireTimers(allShots, authArg, timers, state);
-      const lastScheduledAt = allShots.reduce((latest, shot) => Math.max(latest, shot.scheduledAt), startMs);
-
-      timers.push(setTimeout(() => {
-        if (!state.succeeded) {
-          cancelAll();
-          postToOverlay({ type: 'FIRE_RESULT', line: '> Auto plan complete — ammo depleted (' + allShots.length + ' shots)' });
-          postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: allShots.length } });
-        }
-      }, Math.max(0, lastScheduledAt - Date.now()) + 1000));
     }
 
     // ── Unified strike sequence: shared by default strike and burst mode ──
