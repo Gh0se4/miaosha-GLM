@@ -691,7 +691,7 @@ function mainWorldFetch(opts: {
     setTimeout(() => {
       window.removeEventListener('message', handler);
       reject(new Error("MAIN world fetch timeout"));
-    }, 8000);
+    }, 3000);
   });
 }
 
