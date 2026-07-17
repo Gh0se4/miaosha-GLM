@@ -1164,11 +1164,13 @@ export default defineContentScript({
       let shotsInBurst = 0;
       const BURST_LIMIT = 5;
       const BURST_COOLDOWN_MS = 40000;
-      let wafBlocked = false;
+      let wafCount = 0;
+      const MAX_WAF_RETRIES = 3;
+      const WAF_COOLDOWN_MS = 120000; // 2 min
 
       const scheduleNext = () => {
-        if (cancelled || succeeded || wafBlocked || shotIdx >= total) {
-          if (!succeeded && !cancelled && !wafBlocked) {
+        if (cancelled || succeeded || shotIdx >= total) {
+          if (!succeeded && !cancelled) {
             cancelAll();
             postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ammo depleted (${total} shots)` });
             postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
@@ -1200,15 +1202,24 @@ export default defineContentScript({
               return;
             }
             if (outcome === 'error') {
-              // WAF block: stop and start recovery timer
-              wafBlocked = true;
-              cancelAll();
-              postToOverlay({ type: 'FIRE_RESULT', line: '> ⛔ WAF blocked — 2min cooldown, then you can retry' });
-              postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
-              // Auto-reset wafBlocked after 2 minutes so user can retry
-              postToOverlay({ type: 'WAF_COOLDOWN', seconds: 120 });
-              setTimeout(() => { wafBlocked = false; postToOverlay({ type: 'WAF_COOLDOWN', seconds: 0 }); }, 120000);
+              wafCount++;
+              if (wafCount > MAX_WAF_RETRIES) {
+                cancelAll();
+                postToOverlay({ type: 'FIRE_RESULT', line: `> ⛔ WAF blocked ${wafCount} times — giving up` });
+                postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
+                return;
+              }
+              // WAF is normal during flash sales — pause then auto-retry
+              postToOverlay({ type: 'FIRE_RESULT', line: `> ⛔ WAF #${wafCount}/${MAX_WAF_RETRIES} — pausing ${WAF_COOLDOWN_MS/1000}s then retry` });
+              shotsInBurst = 0;
+              setTimeout(() => { scheduleNext(); }, WAF_COOLDOWN_MS);
               return;
+            } else {
+              // Non-error response — reset WAF counter (session recovered)
+              if (wafCount > 0) {
+                postToOverlay({ type: 'FIRE_RESULT', line: '> ✅ WAF cooldown passed — resuming' });
+                wafCount = 0;
+              }
             }
             if (outcome === 'busy') {
               postToOverlay({ type: 'FIRE_RESULT', line: `> 555 (${shotIdx}/${total})` });
