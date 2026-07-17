@@ -1420,6 +1420,9 @@ export default defineContentScript({
             if (outcome === 'busy') {
               postToOverlay({ type: 'FIRE_RESULT', line: `> 555 (${shotIdx}/${total})` });
             }
+            if (outcome === 'neterr') {
+              postToOverlay({ type: 'FIRE_RESULT', line: `> ⏱ timeout (${shotIdx}/${total}) — no response, next shot` });
+            }
             scheduleNext();
           }, delay),
         );
