@@ -29,6 +29,8 @@ export interface XhrResponse<T = unknown> {
   requestId?: string;
   runId?: string;
   shotId?: string;
+  /** Unparsed response body retained for diagnostics; callers may parse `data`. */
+  body?: string;
 }
 
 function localTiming(): MainWorldTransportTiming {
@@ -89,6 +91,7 @@ function sendBackgroundRequest<T>(opts: XhrRequestOptions): Promise<XhrResponse<
           requestId: opts.requestId,
           runId: opts.runId,
           shotId: opts.shotId,
+          body: res.body,
         });
       },
     );
@@ -133,6 +136,7 @@ function xhrRequestImpl<T>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
         requestId: opts.requestId,
         runId: opts.runId,
         shotId: opts.shotId,
+        body: xhr.responseText,
       });
     };
 

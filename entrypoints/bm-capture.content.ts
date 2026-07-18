@@ -678,6 +678,7 @@ export default defineContentScript({
         requestId: result.requestId,
         runId: result.runId,
         shotId: result.shotId,
+        body: result.body,
       };
     });
 
@@ -958,9 +959,11 @@ export default defineContentScript({
 
     async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
       if (preparingFireRun || currentFireRunner) {
+        postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: 'run_rejected', runId: options.runId, reason: 'run_locked' } });
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
         return;
       }
+      const preparationStartedAt = Date.now();
       preparingFireRun = true;
       const preparationCancellation = options.preparationCancellation ?? createFirePreparationCancellation();
       currentFirePreparationCancellation = preparationCancellation;
@@ -1019,6 +1022,28 @@ export default defineContentScript({
 
       const burstIntervalMs = options.burstIntervalMs ?? Math.max(50, Math.round(fireConfig.burstIntervalMs) || 2100);
       const intervalMs = options.mode === 'burst' ? 500 : burstIntervalMs;
+      const runId = options.runId || `${options.mode}-${Date.now()}`;
+      const maxInFlight = options.mode === 'burst' ? 2 : 1;
+      const calibrationSnapshot = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY).catch(() => null);
+      const authCapturedAt = typeof auth.capturedAt === 'number' ? auth.capturedAt : Date.now();
+      postToOverlay({
+        type: 'FIRE_LOG_V2_RUN',
+        data: {
+          runId,
+          mode: options.mode,
+          targetAt: startMs,
+          preparationStartedAt,
+          preparedAt: Date.now(),
+          startMs,
+          intervalMs,
+          maxInFlight,
+          products: targets.map((target) => ({ productId: target.productId, priority: target.priority })),
+          tickets: plan.shots.map((shot) => ({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt })),
+          calibration: calibrationSnapshot,
+          auth: { source: auth.metadata?.source || 'unknown', ageMs: Math.max(0, Date.now() - authCapturedAt) },
+        },
+      });
+      postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: 'run_prepared', runId, preparedAt: Date.now() } });
       postToOverlay({
         type: 'FIRE_RESULT',
         line: `> ${options.label} ${plan.shots.length} shots · ${burstIntervalMs}ms`,
@@ -1033,6 +1058,7 @@ export default defineContentScript({
             ticketMask: maskTicket(shot.ticket),
           })),
           totalShots: plan.shots.length,
+          runId,
           startMs,
           mode: options.mode,
           burstIntervalMs,
@@ -1049,8 +1075,23 @@ export default defineContentScript({
       };
 
       const total = plan.shots.length;
+      const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
+        const transport = result?.metadata?.transport || {};
+        const request = transport.request;
+        const response = transport.body === undefined && transport.status === undefined ? undefined : {
+          headers: transport.headers || {}, body: transport.body || '', status: transport.status, statusText: transport.statusText,
+        };
+        return {
+          runId, shotId: `shot-${idx}`, shotIdx: idx, productId: shot.productId, priority: shot.priority,
+          ticket: shot.ticket, randstr: shot.randstr, ticketMask: maskTicket(shot.ticket),
+          requestSeq: idx, plannedAt: startMs + idx * intervalMs, outcome, rtt, sentAt,
+          request, response, timing: transport.timing,
+          httpStatus: transport.status, statusText: transport.statusText,
+          ...extra,
+        };
+      };
 
-      const fireOne = async (shot: StrikeShot, idx: number, fireRequest: { requestId: string; onFetchStarted(meta?: { fetchStartedAt?: number }): void; setAbort(abort: () => void): void }): Promise<string> => {
+      const fireOne = async (shot: StrikeShot, idx: number, fireRequest: { requestId: string; onFetchStarted(meta?: { fetchStartedAt?: number; [key: string]: unknown }): void; setAbort(abort: () => void): void }): Promise<string> => {
         if (cancelled) return 'cancelled';
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
@@ -1061,9 +1102,9 @@ export default defineContentScript({
             ticket: { ticket: shot.ticket, randstr: shot.randstr, provider: 'tencent-captcha', createdAt: shot.createdAt },
           }, auth, {
             requestId: fireRequest.requestId,
-            runId: options.runId || `${options.mode}-${startMs}`,
+            runId,
             shotId: `shot-${idx}`,
-            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt }),
+            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId }),
             onAbortReady: fireRequest.setAbort,
           });
           if (cancelled) return 'cancelled';
@@ -1101,7 +1142,7 @@ export default defineContentScript({
             runPostOrderEffect('success log', () => postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' }));
             runPostOrderEffect('shot result log', () => postToOverlay({
               type: 'FIRE_SHOT_RESULT',
-              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
+              data: buildShotLog(shot, idx, 'success', rtt, t1, result, { code: 200, bizId, rawBody: getRawBody(result), serverMsg: '' }),
             }));
             if (options.pollPayment) {
               runPostOrderEffect('payment polling', () => pollPayCheck(auth, bizId, (status) => {
@@ -1116,11 +1157,11 @@ export default defineContentScript({
             return 'success';
           } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out', responsibility: (result.metadata?.classified as any)?.responsibility } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: buildShotLog(shot, idx, 'soldout', rtt, t1, result, { code: 200, rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out', responsibility: (result.metadata?.classified as any)?.responsibility }) });
             return 'soldout';
           } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy', responsibility: (result.metadata?.classified as any)?.responsibility } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: buildShotLog(shot, idx, 'busy', rtt, t1, result, { code: 555, rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy', responsibility: (result.metadata?.classified as any)?.responsibility }) });
             return 'busy';
           } else {
             const rawBody = result.metadata?.raw;
@@ -1132,19 +1173,7 @@ export default defineContentScript({
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
-              data: {
-                shotIdx: idx,
-                productId: shot.productId,
-                priority: shot.priority,
-                outcome: cls.outcome,
-                code: cls.code,
-                rtt,
-                sentAt: t1,
-                ticketMask: maskTicket(shot.ticket),
-                rawBody: getRawBody(result), serverMsg: cls.serverMsg,
-                rawServerMsg: cls.rawServerMsg,
-                responsibility: cls.responsibility,
-              },
+              data: buildShotLog(shot, idx, cls.outcome, rtt, t1, result, { code: cls.code, rawBody: getRawBody(result), serverMsg: cls.serverMsg, rawServerMsg: cls.rawServerMsg, responsibility: cls.responsibility }),
             });
             return cls.outcome;
           }
@@ -1154,25 +1183,12 @@ export default defineContentScript({
           postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + cls.rawServerMsg });
           postToOverlay({
             type: 'FIRE_SHOT_RESULT',
-            data: {
-              shotIdx: idx,
-              productId: shot.productId,
-              priority: shot.priority,
-              outcome: cls.outcome,
-              code: cls.code,
-              rtt: Date.now() - t1,
-              sentAt: t1,
-              ticketMask: maskTicket(shot.ticket),
-              rawBody: '', serverMsg: cls.serverMsg,
-              rawServerMsg: cls.rawServerMsg,
-              responsibility: cls.responsibility,
-            },
+            data: buildShotLog(shot, idx, cls.outcome, Date.now() - t1, t1, undefined, { code: cls.code, rawBody: '', serverMsg: cls.serverMsg, rawServerMsg: cls.rawServerMsg, responsibility: cls.responsibility }),
           });
           return cls.outcome;
         }
       };
 
-      const runId = options.runId || `${options.mode}-${Date.now()}`;
       const schedule = buildFireSchedule({
         runId,
         mode: options.mode,
@@ -1187,8 +1203,9 @@ export default defineContentScript({
       const shotsById = new Map(schedule.slots.map((slot, index) => [slot.shotId, plan.shots[index]]));
       runner = new FireRunner({
         ...schedule,
-        maxInFlight: options.mode === 'burst' ? 2 : 1,
+        maxInFlight,
         onEvent: (event) => {
+          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: event.type, ...event.payload } });
           if (event.type === 'tickets_reserved') {
             const reservedKeys = new Set(plan.shots.map((shot) => shot.ticket + ':' + shot.randstr + ':' + shot.createdAt));
             _ticketPool = _ticketPool.filter((ticket: any) => !reservedKeys.has(ticket.ticket + ':' + ticket.randstr + ':' + ticket.createdAt));
@@ -1219,6 +1236,7 @@ export default defineContentScript({
       currentStrikeCancel = cancelAll;
       finishPreparationCancellation();
       const result = await runner.run();
+      postToOverlay({ type: 'FIRE_LOG_V2_RUN', data: { runId, finishedAt: Date.now(), lifecycleState: result.reason || 'complete', stopReason: result.reason || 'complete' } });
       if (!result.accepted) {
         if (currentFireRunner === runner) currentFireRunner = null;
         currentStrikeCancel = null;

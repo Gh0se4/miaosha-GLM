@@ -197,6 +197,68 @@ describe('Fire Log V2 store', () => {
     expect(typeof exported.exportedAt).toBe('string');
   });
 
+  it('records a full run and shot lifecycle from the content compatibility messages', async () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'lifecycle-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      document: { visibilityState: 'visible', addEventListener: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 }, setTimeout: () => 0,
+      postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    const emit = (type: string, data: Record<string, unknown>) => {
+      for (const listener of listeners) listener({ data: { __overlay: true, type, data } });
+    };
+
+    emit('FIRE_LOG_V2_RUN', {
+      runId: 'run-1', mode: 'manual', targetAt: 1000, preparationStartedAt: 900,
+      startMs: 1000, intervalMs: 2100, maxInFlight: 1,
+      products: [{ productId: 'product-1', priority: 1 }],
+    });
+    emit('FIRE_LOG_V2_EVENT', { type: 'tickets_reserved', runId: 'run-1', count: 1 });
+    emit('FIRE_LOG_V2_EVENT', {
+      type: 'shot_released', runId: 'run-1', shotId: 'shot-1', requestSeq: 0, plannedAt: 1000, scheduledAt: 1002,
+    });
+    emit('FIRE_LOG_V2_EVENT', {
+      type: 'fetch_started', runId: 'run-1', shotId: 'shot-1', requestSeq: 0,
+      plannedAt: 1000, timing: { bridgeReceivedAt: 1003, fetchCalledAt: 1004 },
+    });
+    emit('FIRE_SHOT_RESULT', {
+      runId: 'run-1', shotId: 'shot-1', shotIdx: 0, productId: 'product-1', priority: 1,
+      ticket: 'full-ticket', randstr: 'full-randstr', plannedAt: 1000, requestSeq: 0,
+      outcome: 'busy', httpStatus: 555, statusText: 'Busy', rtt: 12,
+      request: { method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview', headers: { Authorization: 'secret', 'X-Trace': 'keep' }, body: '{"ticket":"full-ticket"}' },
+      response: { headers: { 'Set-Cookie': 'secret', 'X-Response': 'keep' }, body: 'x'.repeat(800) },
+      timing: { bridgeReceivedAt: 1003, fetchCalledAt: 1004, responseHeadersAt: 1008, bodyCompletedAt: 1012 },
+    });
+    emit('FIRE_LOG_V2_EVENT', { type: 'run_finished', runId: 'run-1', reason: 'complete' });
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const report = await (window.__fireLogV2Store as FireLogStore).exportLog('');
+    expect(report.schemaVersion).toBe(2);
+    expect(report.runs).toHaveLength(1);
+    expect((report.runs as Array<Record<string, unknown>>)[0]).toMatchObject({ runId: 'run-1', maxInFlight: 1 });
+    expect((report.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual(expect.arrayContaining(['tickets_reserved', 'shot_released', 'fetch_started', 'run_finished']));
+    expect(report.shots).toHaveLength(1);
+    expect((report.shots as Array<Record<string, unknown>>)[0]).toMatchObject({
+      runId: 'run-1', shotId: 'shot-1', plannedAt: 1000, requestSeq: 0,
+      httpStatus: 555, statusText: 'Busy', ticket: 'full-ticket', randstr: 'full-randstr',
+      request: { method: 'POST', headers: { 'X-Trace': 'keep' } },
+      response: { headers: { 'X-Response': 'keep' }, body: 'x'.repeat(800) },
+      timing: { fetchCalledAt: 1004 },
+    });
+  });
+
   it('writes a complete session snapshot using the runtime manifest version', async () => {
     const listeners: Record<string, Array<() => void>> = {};
     const window: Record<string, unknown> = {
@@ -360,6 +422,7 @@ describe('Fire Log V2 store', () => {
       type: 'FIRE_RESULT',
       data: expect.objectContaining({ line: expect.stringContaining('日志仅临时保存在内存，刷新页面会丢失') }),
     }));
+    await expect(((window as unknown as Record<string, unknown>).__fireLogDownload as () => Promise<Record<string, unknown>>)()).resolves.toMatchObject({ schemaVersion: 2 });
     expect(document.body.textContent).not.toContain('日志仅临时保存在内存，刷新页面会丢失');
 
     (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 0, burstIntervalMs: 100 });

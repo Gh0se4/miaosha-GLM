@@ -86,7 +86,7 @@ var _log_initialVisibilityState = '';
 
   function downloadV2Log() {
     if (!_log_v2Store) { legacyDownloadLog(); return Promise.resolve(null); }
-    return _log_v2Store.exportLog(_log_sessionId).then(function(report) {
+    function downloadReport(report) {
       var blob = new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' });
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
@@ -99,10 +99,11 @@ var _log_initialVisibilityState = '';
         URL.revokeObjectURL(url);
       }, 100);
       return report;
-    }).catch(function() {
-      // Export must stay usable even when persistence is unavailable.
-      legacyDownloadLog();
-      return null;
+    }
+    return _log_v2Store.exportLog(_log_sessionId).then(downloadReport).catch(function() {
+      // A live V2 store may be memory-only. Preserve the schema rather than
+      // silently falling back to the legacy report just because IDB failed.
+      return downloadReport({ schemaVersion: 2, exportedAt: new Date().toISOString(), extensionVersion: _fireLogV2ManifestVersion(), session: {}, runs: [], events: [], shots: [] });
     });
   }
 
@@ -186,6 +187,31 @@ var _log_initialVisibilityState = '';
   window.addEventListener('message', function(e) {
     if (!e.data || !e.data[MSG_OVL]) return;
     var d = e.data;
+
+    if (d.type === 'FIRE_LOG_V2_RUN' && d.data) {
+      if (_log_v2Store) _log_v2Store.writeRun(Object.assign({ sessionId: _log_sessionId }, d.data));
+      return;
+    }
+
+    if (d.type === 'FIRE_LOG_V2_EVENT' && d.data) {
+      var eventData = d.data;
+      writeV2Event(eventData.type || 'fire_event', eventData);
+      if (_log_v2Store && eventData.type === 'tickets_returned' && Array.isArray(eventData.shots)) {
+        for (var returnedIndex = 0; returnedIndex < eventData.shots.length; returnedIndex++) {
+          var returned = eventData.shots[returnedIndex] || {};
+          _log_v2Store.writeShot({
+            shotId: returned.shotId,
+            sessionId: _log_sessionId,
+            runId: eventData.runId,
+            requestSeq: returned.requestSeq,
+            plannedAt: returned.plannedAt,
+            terminalUnsentReason: returned.terminalUnsentReason,
+          });
+        }
+      }
+      return;
+    }
+
     writeV2Event(d.type, d.data || { line: d.line || '' });
 
     if (d.type === 'FIRE_BATCH_START' && d.data) {
@@ -240,14 +266,23 @@ var _log_initialVisibilityState = '';
         localSequence: _log_shotSeq,
         productId: shot.productId,
         priority: shot.priority,
+        requestSeq: shot.requestSeq,
+        plannedAt: shot.plannedAt,
         ticket: shot.ticket,
         randstr: shot.randstr,
         request: shot.request,
-        response: shot.response,
+        response: shot.response || {
+          headers: shot.responseHeaders || {},
+          body: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
+          status: shot.httpStatus,
+          statusText: shot.statusText,
+        },
         outcome: entry.outcome,
         httpStatus: entry.httpStatus,
+        statusText: shot.statusText || (shot.response && shot.response.statusText) || '',
         rttMs: entry.rttMs,
-        responseBody: entry.rawBody,
+        timing: shot.timing,
+        responseBody: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
         rawServerMessage: entry.rawServerMsg
       });
 

@@ -40,7 +40,11 @@ describe('BigmodelOrderPipeline result classification', () => {
   afterEach(() => setMainWorldFetcher(null));
 
   it('classifies 555 as busy with an explicitly client-side responsibility label', async () => {
-    setMainWorldFetcher(async () => response({ code: 555, msg: 'system busy' }));
+    setMainWorldFetcher(async () => ({
+      ...response({ code: 555, msg: 'system busy' }, 'Busy'),
+      headers: { Authorization: 'secret', 'X-Trace': 'trace-1' },
+      body: '{"code":555,"msg":"system busy"}',
+    }));
 
     const result = await new BigmodelOrderPipeline().run(context, auth);
     const classified = result.metadata?.classified as any;
@@ -49,6 +53,11 @@ describe('BigmodelOrderPipeline result classification', () => {
     expect(classified).toMatchObject({ outcome: 'busy', code: 555, rawServerMsg: 'system busy' });
     expect(classified.responsibility).toMatchObject({ source: 'client-side-classification' });
     expect(classified.responsibility.cause).toContain('推断');
+    expect(result.metadata?.transport).toMatchObject({
+      status: 200, statusText: 'Busy', headers: { Authorization: 'secret', 'X-Trace': 'trace-1' },
+      body: '{"code":555,"msg":"system busy"}',
+      request: { method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview', body: expect.stringContaining('ticket-1') },
+    });
   });
 
   it('classifies sold-out responses without treating them as a terminal result', async () => {

@@ -36,7 +36,7 @@ export interface FireRunInput {
     productId: string;
     requestSeq: number;
     requestId: string;
-    onFetchStarted(meta?: { fetchStartedAt?: number }): void;
+    onFetchStarted(meta?: { fetchStartedAt?: number; [key: string]: unknown }): void;
     setAbort(abort: () => void): void;
   }): Promise<{
     outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
@@ -171,7 +171,7 @@ export class FireRunner {
 
       if (this.cancelled && stopReason === 'complete') stopReason = 'cancelled';
       await Promise.all([...inFlight]);
-      this.returnUnstarted();
+      this.returnUnstarted(stopReason);
       this.event('run_finished', { runId: this.input.runId, reason: stopReason });
       return { accepted: true, reason: stopReason };
     } finally {
@@ -189,7 +189,7 @@ export class FireRunner {
   }> {
     const requestId = `${this.input.runId}:${shot.shotId}:${shot.requestSeq}`;
     let fetchStartedAt: number | undefined;
-    const onFetchStarted = (meta: { fetchStartedAt?: number } = {}) => {
+    const onFetchStarted = (meta: { fetchStartedAt?: number; [key: string]: unknown } = {}) => {
       if (shot.state !== 'released') return;
       fetchStartedAt = meta.fetchStartedAt ?? this.now();
       shot.fetchStartedAt = fetchStartedAt;
@@ -200,6 +200,8 @@ export class FireRunner {
         requestSeq: shot.requestSeq,
         requestId,
         fetchStartedAt,
+        plannedAt: shot.plannedAt,
+        ...meta,
       });
     };
     try {
@@ -230,11 +232,12 @@ export class FireRunner {
       runId: this.input.runId,
       shotId: shot.shotId,
       requestSeq: shot.requestSeq,
+      plannedAt: shot.plannedAt,
       scheduledAt: shot.scheduledAt,
     });
   }
 
-  private returnUnstarted(): void {
+  private returnUnstarted(reason: Exclude<FireRunResult['reason'], 'run_locked'>): void {
     const returned = this.shots.filter((shot) => shot.state === 'reserved' || shot.state === 'released');
     for (const shot of returned) this.transition(shot, 'returned');
     if (returned.length > 0) {
@@ -242,6 +245,12 @@ export class FireRunner {
         runId: this.input.runId,
         count: returned.length,
         shotIds: returned.map((shot) => shot.shotId),
+        shots: returned.map((shot) => ({
+          shotId: shot.shotId,
+          requestSeq: shot.requestSeq,
+          plannedAt: shot.plannedAt,
+          terminalUnsentReason: reason === 'complete' ? 'rejected' : reason,
+        })),
       });
     }
   }

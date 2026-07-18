@@ -301,6 +301,9 @@ describe('FireRunner', () => {
     await running;
     expect(fixture.starts).toEqual([]);
     expect(runner.snapshot().map(({ state }) => state)).toEqual(['returned']);
+    expect(fixture.events.find(({ type }) => type === 'tickets_returned')?.payload).toMatchObject({
+      shots: [{ shotId: 's1', plannedAt: 100, terminalUnsentReason: 'cancelled' }],
+    });
   });
 
   it('returns a released ticket when its observer cancels before fetch starts', async () => {

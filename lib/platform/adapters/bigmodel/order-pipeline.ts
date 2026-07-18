@@ -163,6 +163,30 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
         onAbortReady: fireRequest?.onAbortReady,
       });
       const body = res.data;
+      const requestBody = JSON.stringify({
+        productId: ctx.productId,
+        ticket: ctx.ticket.ticket,
+        randstr: ctx.ticket.randstr || '',
+      });
+      const transport = {
+        timing: res.timing,
+        status: res.status,
+        statusText: res.statusText,
+        headers: res.headers,
+        body: res.body ?? (typeof body === 'string' ? body : JSON.stringify(body)),
+        request: {
+          method: 'POST',
+          url: 'https://bigmodel.cn/api/biz/pay/preview',
+          headers: {
+            Accept: 'application/json, text/plain, */*',
+            'Content-Type': 'application/json;charset=utf-8',
+            Authorization: authorization,
+            'Bigmodel-Organization': auth.headers['bigmodel-organization'],
+            'Bigmodel-Project': auth.headers['bigmodel-project'],
+          },
+          body: requestBody,
+        },
+      };
 
       if (body.code === 200 && body.data && !body.data.soldOut && body.data.bizId) {
         const session: PaymentSession = {
@@ -174,7 +198,7 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
           qrCode: body.data.qrCode,
           raw: body.data,
         };
-        return { success: true, data: session };
+        return { success: true, data: session, metadata: { transport } };
       }
 
       if (body.code === 200 && body.data?.soldOut) {
@@ -182,6 +206,7 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
           success: false,
           error: 'sold out',
           metadata: {
+            transport,
             classified: {
               outcome: 'soldout', code: 200, serverMsg: 'sold out', rawServerMsg: body.msg || '',
               responsibility: responsibility('服务端商品状态', '当前商品', '响应字段 soldOut 为 true；客户端按该字段分类'),
@@ -190,9 +215,9 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
         };
       }
 
-      const rawBodyText = typeof body === 'string' ? body : JSON.stringify(body);
+      const rawBodyText = transport.body;
       const classified = classifyPreviewError(body, rawBodyText);
-      return { success: false, error: classified.serverMsg, metadata: { classified, raw: body, rawBodyText } };
+      return { success: false, error: classified.serverMsg, metadata: { classified, raw: body, rawBodyText, transport } };
     } catch (e: any) {
       const classified = classifyPreviewNetworkError(e);
       return {
