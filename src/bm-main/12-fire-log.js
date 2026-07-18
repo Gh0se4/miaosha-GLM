@@ -14,6 +14,8 @@ var _log_waveCount = 0;
 var _log_shotSeq = 0;
 var _log_v2Store = null;
 var _log_v2PersistenceWarningShown = false;
+var _log_v2PersistenceErrorWritten = false;
+var _log_sessionStartedAt = '';
 
 (function initFireLog() {
   // Load existing log from sessionStorage
@@ -23,6 +25,7 @@ var _log_v2PersistenceWarningShown = false;
       _log_entries = saved.entries;
       _log_sessionId = saved.sessionId || '';
       _log_shotSeq = saved.shotSeq || 0;
+      _log_sessionStartedAt = saved.sessionStartAt || '';
     }
   } catch(e) {}
 
@@ -30,11 +33,13 @@ var _log_v2PersistenceWarningShown = false;
   if (!_log_sessionId) {
     _log_sessionId = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
   }
+  if (!_log_sessionStartedAt) _log_sessionStartedAt = new Date().toISOString();
 
   function saveLog() {
     try {
       sessionStorage.setItem(_NS + 'lg', JSON.stringify({
         sessionId: _log_sessionId,
+        sessionStartAt: _log_sessionStartedAt,
         updatedAt: new Date().toISOString(),
         entries: _log_entries,
         shotSeq: _log_shotSeq,
@@ -97,6 +102,20 @@ var _log_v2PersistenceWarningShown = false;
     });
   }
 
+  function writeV2Session() {
+    if (!_log_v2Store) return;
+    _log_v2Store.writeSession({
+      sessionId: _log_sessionId,
+      runtimeManifestVersion: _fireLogV2ManifestVersion(),
+      userAgent: navigator.userAgent,
+      pageUrl: location.href,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      visibilityState: document.visibilityState || '',
+      sessionStartAt: _log_sessionStartedAt,
+      lastUpdatedAt: new Date().toISOString()
+    });
+  }
+
   function writeV2Event(type, data) {
     if (!_log_v2Store) return;
     _log_v2Store.writeEvent({
@@ -104,33 +123,38 @@ var _log_v2PersistenceWarningShown = false;
       sessionId: _log_sessionId,
       runId: data && data.runId,
       timestamp: new Date().toISOString(),
-      monotonicMs: performance && performance.now ? performance.now() : 0,
+      monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
       type: type,
       details: data || {}
     });
+    writeV2Session();
   }
 
   try {
     if (typeof createFireLogStore === 'function') {
       _log_v2Store = createFireLogStore({
-        onPersistenceError: function() {
-          if (_log_v2PersistenceWarningShown) return;
-          _log_v2PersistenceWarningShown = true;
-          _log_addLine('⚠ 日志仅临时保存在内存，刷新页面会丢失', '#d97706');
+        onPersistenceError: function(error) {
+          if (_log_v2PersistenceErrorWritten) return;
+          _log_v2PersistenceErrorWritten = true;
+          writeV2Event('persistence_error', {
+            message: error && error.message ? error.message : String(error || 'IndexedDB persistence failed')
+          });
+          if (!_log_v2PersistenceWarningShown) {
+            _log_v2PersistenceWarningShown = true;
+            _log_addLine('⚠ 日志仅临时保存在内存，刷新页面会丢失', '#d97706');
+          }
         }
       });
-      _log_v2Store.writeSession({
-        sessionId: _log_sessionId,
-        extensionVersion: _fireLogV2ManifestVersion(),
-        userAgent: navigator.userAgent,
-        pageUrl: location.href,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        startedAt: new Date().toISOString(),
-        visibilityState: document.visibilityState || ''
-      });
+      writeV2Session();
       window.__fireLogV2Store = _log_v2Store;
     }
   } catch (e) { _log_v2Store = null; }
+
+  if (document && document.addEventListener) {
+    document.addEventListener('visibilitychange', function() {
+      writeV2Event('visibility_changed', { visibilityState: document.visibilityState || '' });
+    });
+  }
 
   function clearLog() {
     _log_entries = [];

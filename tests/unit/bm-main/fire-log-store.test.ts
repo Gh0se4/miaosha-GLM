@@ -197,6 +197,102 @@ describe('Fire Log V2 store', () => {
     expect(typeof exported.exportedAt).toBe('string');
   });
 
+  it('writes a complete session snapshot using the runtime manifest version', async () => {
+    const listeners: Record<string, Array<() => void>> = {};
+    const window: Record<string, unknown> = {
+      addEventListener: (type: string, listener: () => void) => (listeners[type] ||= []).push(listener),
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'session-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      _runtimeManifestVersion: '2.4.6',
+      document: { visibilityState: 'hidden', addEventListener: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'session-agent' }, location: { href: 'https://example.test/glm-coding' },
+      Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Shanghai' }) }) },
+      Date, Math, Promise, performance: { now: () => 12 }, setTimeout: () => 0,
+      postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const store = window.__fireLogV2Store as FireLogStore;
+    expect((await store.readAll()).session).toMatchObject({
+      runtimeManifestVersion: '2.4.6',
+      userAgent: 'session-agent',
+      pageUrl: 'https://example.test/glm-coding',
+      timezone: 'Asia/Shanghai',
+      visibilityState: 'hidden',
+    });
+    expect(typeof (await store.readAll()).session.sessionStartAt).toBe('string');
+    expect(typeof (await store.readAll()).session.lastUpdatedAt).toBe('string');
+  });
+
+  it('records visibility changes with wall-clock, monotonic, and state details', async () => {
+    const listeners: Record<string, Array<() => void>> = {};
+    const document = {
+      visibilityState: 'visible',
+      addEventListener: (type: string, listener: () => void) => (listeners[type] ||= []).push(listener),
+    };
+    const window: Record<string, unknown> = {
+      addEventListener: () => {},
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'visibility-', MSG_OVL: '__overlay', indexedDB: idbFactory, document,
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' }, Intl, Date, Math, Promise,
+      performance: { now: () => 42 }, setTimeout: () => 0, postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    document.visibilityState = 'hidden';
+    listeners.visibilitychange[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const events = (await (window.__fireLogV2Store as FireLogStore).readAll()).events;
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'visibility_changed',
+      monotonicMs: 42,
+      details: { visibilityState: 'hidden' },
+    }));
+    expect(typeof events.find((event) => event.type === 'visibility_changed')!.timestamp).toBe('string');
+  });
+
+  it('records one persistence error without recursively rewriting it', async () => {
+    const posted: Array<Record<string, unknown>> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: () => {},
+      postMessage: (message: Record<string, unknown>) => posted.push(message),
+    };
+    const scope = vm.createContext({
+      window, _NS: 'failure-', MSG_OVL: '__overlay',
+      document: { visibilityState: 'visible', addEventListener: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' }, Intl, Date, Math, Promise,
+      performance: { now: () => 8 }, setTimeout: () => 0,
+      postToOverlay: (type: string, data: Record<string, unknown>) => posted.push({ __overlay: true, type, data }),
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const events = (await (window.__fireLogV2Store as FireLogStore).readAll()).events;
+    expect(events.filter((event) => event.type === 'persistence_error')).toHaveLength(1);
+    expect(posted).toContainEqual(expect.objectContaining({
+      type: 'FIRE_RESULT',
+      data: expect.objectContaining({ line: expect.stringContaining('日志仅临时保存在内存') }),
+    }));
+  });
+
   it('surfaces an overlay warning when persistence falls back to memory', async () => {
     const listeners: Array<(event: MessageEvent) => void> = [];
     const posted: Array<Record<string, unknown>> = [];

@@ -7,6 +7,9 @@ var _batchCount = 0; // captchas solved in current batch session
 var _activeCaptcha = null; // reference to the currently open TencentCaptcha instance (for force-destroy on ESC)
 var BATCH_SESSION_LIMIT = 100; // auto-stop after this many per session (default 100, updatable via CAPTCHA_CONFIG)
 var _authFailed = false; // true when batch-preview API returns code=1001 (not logged in)
+// MAIN-world scripts cannot reliably access chrome.runtime. The content script
+// injects the manifest version as a data attribute before this bundle runs.
+var _runtimeManifestVersion = (typeof document !== 'undefined' && document.currentScript && document.currentScript.dataset && document.currentScript.dataset.version) || '';
 
 // ── Page-level ticket store (sessionStorage) ──
 // Tickets live in the page's sessionStorage: they survive a refresh of the same tab,

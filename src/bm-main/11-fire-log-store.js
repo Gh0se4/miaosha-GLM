@@ -32,6 +32,7 @@ function _fireLogV2Sanitize(value, inHeaders) {
 
 function _fireLogV2ManifestVersion() {
   try {
+    if (typeof _runtimeManifestVersion !== 'undefined' && _runtimeManifestVersion) return _runtimeManifestVersion;
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) return chrome.runtime.getManifest().version || '';
     if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.getManifest) return browser.runtime.getManifest().version || '';
   } catch (e) {}
