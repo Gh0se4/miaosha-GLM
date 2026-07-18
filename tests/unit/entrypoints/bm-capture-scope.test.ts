@@ -508,4 +508,20 @@ describe('bm-capture.content.ts scope regression', () => {
       data: expect.objectContaining({ type: 'fetch_timed_out', shotId: 'shot-0', shot: expect.objectContaining({ outcome: 'timed_out' }) }),
     }));
   });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' }],
+    ['burst', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' }],
+    ['auto', 'PREFIRE_PREPARE', { targetMs: 2_000, fireStartMs: 1_000, preparationLeadMs: 3_000, rttCompensationMs: 7, clockOffsetMs: 2, earlyOffsetMs: 10 }],
+  ])('records exactly one preparation-start event for an active %s run', async (_mode, command, data) => {
+    const harness = createContentHarness();
+    await harness.start();
+    await harness.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const preparations = harness.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    expect(preparations).toHaveLength(1);
+    expect(preparations[0].data).toMatchObject({ runId: expect.any(String), wallClockMs: expect.any(Number), monotonicMs: expect.any(Number) });
+    if (_mode === 'auto') expect(preparations[0].data?.details).toMatchObject({ targetMs: 2_000, earlyOffsetMs: 10 });
+  });
 });

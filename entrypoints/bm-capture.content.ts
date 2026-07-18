@@ -980,6 +980,7 @@ export default defineContentScript({
       const preparationStartedAt = Date.now();
       preparingFireRun = true;
       const preparationCancellation = options.preparationCancellation ?? createFirePreparationCancellation();
+      const runId = options.runId || `${options.mode}-${Date.now()}`;
       currentFirePreparationCancellation = preparationCancellation;
       const finishPreparationCancellation = () => {
         if (currentFirePreparationCancellation === preparationCancellation) {
@@ -991,6 +992,15 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
       };
       try {
+      if (preparationCancellation.cancelled) {
+        reportPreparationCancelled();
+        return;
+      }
+      postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
+        type: 'run_prepare_started', runId, wallClockMs: preparationStartedAt,
+        monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
+        details: { mode: options.mode, startMs, ...(options.mode === 'auto' && options.autoTiming ? options.autoTiming : {}) },
+      } });
       const auth = coerceToPlatformAuth(authArg);
       if (preparationCancellation.cancelled) {
         reportPreparationCancelled();
@@ -1036,7 +1046,6 @@ export default defineContentScript({
 
       const burstIntervalMs = options.burstIntervalMs ?? Math.max(50, Math.round(fireConfig.burstIntervalMs) || 2100);
       const intervalMs = options.mode === 'burst' ? 500 : burstIntervalMs;
-      const runId = options.runId || `${options.mode}-${Date.now()}`;
       const maxInFlight = options.mode === 'burst' ? 2 : 1;
       const calibrationSnapshot = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY).catch(() => null);
       const authCapturedAt = typeof auth.capturedAt === 'number' ? auth.capturedAt : Date.now();
@@ -1480,11 +1489,6 @@ export default defineContentScript({
             clockOffsetMs: Number(prefireData.clockOffsetMs ?? 0),
             earlyOffsetMs: Number(prefireData.earlyOffsetMs ?? 0),
           };
-          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-            type: 'run_prepare_started', runId, wallClockMs: Date.now(),
-            monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
-            details: { mode: 'auto', startMs: fireStartMs, ...autoTiming },
-          } });
           await prefireAndBurst(fireStartMs, 'auto', preparationCancellation, runId, autoTiming);
         }
         if (event.data.type === 'CANCEL_FIRE') {
