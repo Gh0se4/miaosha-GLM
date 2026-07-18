@@ -268,6 +268,38 @@ describe('Fire Log V2 store', () => {
     });
   });
 
+  it('registers one visibility diagnostic handler when the MAIN logger is reinitialized', async () => {
+    const listeners: Record<string, Array<() => void>> = {};
+    const document = {
+      visibilityState: 'hidden',
+      addEventListener: (type: string, listener: () => void) => (listeners[type] ||= []).push(listener),
+    };
+    const window: Record<string, unknown> = {
+      addEventListener: () => {},
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'visibility-reinit-', MSG_OVL: '__overlay', indexedDB: idbFactory, document,
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' }, Intl, Date, Math, Promise,
+      performance: { now: () => 42 }, setTimeout: () => 0, postToOverlay: () => {},
+    });
+    vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main/11-fire-log-store.js'), 'utf8'), scope);
+    const loggerSource = readFileSync(resolve(__dirname, '../../../src/bm-main/12-fire-log.js'), 'utf8');
+    vm.runInContext(loggerSource, scope);
+    vm.runInContext(loggerSource, scope);
+
+    document.visibilityState = 'visible';
+    listeners.visibilitychange.forEach((listener) => listener());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const events = (await (window.__fireLogV2Store as FireLogStore).readAll()).events;
+    expect(listeners.visibilitychange).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'visibility_changed')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'visibility_changed')).toMatchObject({ details: { visibilityState: 'visible' } });
+  });
+
   it('records one persistence error without recursively rewriting it', async () => {
     const posted: Array<Record<string, unknown>> = [];
     const window: Record<string, unknown> = {

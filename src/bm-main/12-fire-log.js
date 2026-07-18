@@ -155,10 +155,11 @@ var _log_initialVisibilityState = '';
     }
   } catch (e) { _log_v2Store = null; }
 
-  if (document && document.addEventListener) {
-    document.addEventListener('visibilitychange', function() {
+  if (document && document.addEventListener && !window.__fireLogV2VisibilityHandler) {
+    window.__fireLogV2VisibilityHandler = function() {
       writeV2Event('visibility_changed', { visibilityState: document.visibilityState || '' });
-    });
+    };
+    document.addEventListener('visibilitychange', window.__fireLogV2VisibilityHandler);
   }
 
   function clearLog() {
