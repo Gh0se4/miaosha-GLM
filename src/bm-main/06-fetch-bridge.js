@@ -30,7 +30,11 @@ window.addEventListener('message', function(ev) {
     bridgeReceivedAt: Date.now(),
     bridgeReceivedPerfMs: performance.now(),
   };
-  var common = { requestId: requestId, runId: d.runId, shotId: d.shotId };
+  timing.fetchCalledAt = timing.bridgeReceivedAt;
+  timing.fetchCalledPerfMs = timing.bridgeReceivedPerfMs;
+  timing.responseHeadersAt = timing.fetchCalledAt;
+  timing.bodyCompletedAt = timing.fetchCalledAt;
+  var common = { requestId: requestId, reqId: requestId, runId: d.runId, shotId: d.shotId };
   var url = String(opts.url || '');
   if (url.indexOf('://bigmodel.cn/') === -1 &&
       url.indexOf('://www.bigmodel.cn/') === -1 &&
@@ -64,6 +68,8 @@ window.addEventListener('message', function(ev) {
 
   timing.fetchCalledAt = Date.now();
   timing.fetchCalledPerfMs = performance.now();
+  timing.responseHeadersAt = timing.fetchCalledAt;
+  timing.bodyCompletedAt = timing.fetchCalledAt;
   postMainWorldFetchEvent('DO_FETCH_STARTED', Object.assign({}, common, { timing: timing }));
 
   window.fetch(opts.url, {

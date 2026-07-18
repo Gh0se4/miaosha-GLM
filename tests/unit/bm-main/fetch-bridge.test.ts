@@ -19,7 +19,7 @@ function loadBridge(fetch: ReturnType<typeof vi.fn>) {
   let perf = 100;
   const window = {
     addEventListener: vi.fn((_type: string, listener: (event: MessageEvent) => void) => listeners.push(listener)),
-    postMessage: vi.fn((message: Message) => posted.push({ ...message })),
+    postMessage: vi.fn((message: Message) => posted.push(structuredClone(message))),
     fetch,
   };
   const scope = vm.createContext({
@@ -65,19 +65,40 @@ describe('MAIN world fetch bridge protocol', () => {
     const [started, result] = bridge.posted;
     expect(started).toMatchObject({ __evt: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1' });
     expect(result).toMatchObject({ __evt: true, ok: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1', status: 201, statusText: 'Created', body: '{"ok":true}', headers: { 'x-trace': 'trace-1' } });
-    const timing = result.timing as Record<string, number>;
-    expect(timing).toMatchObject({
+    const assertCompleteTiming = (timing: Record<string, number>) => {
+      expect(timing).toMatchObject({
       bridgeReceivedAt: expect.any(Number),
       bridgeReceivedPerfMs: expect.any(Number),
       fetchCalledAt: expect.any(Number),
       fetchCalledPerfMs: expect.any(Number),
       responseHeadersAt: expect.any(Number),
       bodyCompletedAt: expect.any(Number),
+      });
+      expect(timing.bridgeReceivedAt).toBeLessThanOrEqual(timing.fetchCalledAt);
+      expect(timing.fetchCalledAt).toBeLessThanOrEqual(timing.responseHeadersAt);
+      expect(timing.responseHeadersAt).toBeLessThanOrEqual(timing.bodyCompletedAt);
+      expect(timing.bridgeReceivedPerfMs).toBeLessThanOrEqual(timing.fetchCalledPerfMs);
+    };
+    assertCompleteTiming(started.timing as Record<string, number>);
+    assertCompleteTiming(result.timing as Record<string, number>);
+  });
+
+  it('preserves reqId alongside requestId for legacy callers', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      statusText: 'OK',
+      headers: new Map(),
+      text: () => Promise.resolve('legacy'),
     });
-    expect(timing.bridgeReceivedAt).toBeLessThanOrEqual(timing.fetchCalledAt);
-    expect(timing.fetchCalledAt).toBeLessThanOrEqual(timing.responseHeadersAt);
-    expect(timing.responseHeadersAt).toBeLessThanOrEqual(timing.bodyCompletedAt);
-    expect(timing.bridgeReceivedPerfMs).toBeLessThanOrEqual(timing.fetchCalledPerfMs);
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', reqId: 'legacy-1', opts: { url: 'https://bigmodel.cn/api/test' } });
+    await flush();
+
+    expect(bridge.posted).toHaveLength(2);
+    for (const message of bridge.posted) {
+      expect(message).toMatchObject({ requestId: 'legacy-1', reqId: 'legacy-1' });
+    }
   });
 
   it('aborts a matching request and suppresses its late result', async () => {
