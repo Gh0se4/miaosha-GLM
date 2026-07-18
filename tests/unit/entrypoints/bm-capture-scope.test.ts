@@ -16,12 +16,15 @@ function createContentHarness(options: {
   capture?: Promise<any>;
   paymentStateFails?: boolean;
   orderResult?: any;
+  nextSaleTime?: number;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
   const runnerEvents: string[] = [];
   let pollCalls = 0;
   let runnerCount = 0;
+  let calibrationCalls = 0;
+  let nextSaleTime = options.nextSaleTime ?? Date.now() + 60 * 60 * 1000;
   const auth = {
     platform: 'bigmodel',
     capturedAt: Date.now(),
@@ -122,7 +125,7 @@ function createContentHarness(options: {
       buildStrikeQueue: ({ tickets, targets }: any) => ({ shots: [{ ...tickets[0], productId: targets[0].productId, priority: targets[0].priority }] }),
     };
     if (id.includes('settings/fire')) return { fireStore: { get: async () => ({ payType: 'ALI', burstIntervalMs: 2100 }), set: async () => undefined }, FIRE_CONFIG_DEFAULT: { payType: 'ALI', burstIntervalMs: 2100 } };
-    if (id.includes('settings/sale-time')) return { SALE_ALARM_MINUTES: [], SALE_TIME_DEFAULT: {}, getNextSaleTime: () => Date.now(), saleTimeStore: { get: async () => ({}) } };
+    if (id.includes('settings/sale-time')) return { SALE_ALARM_MINUTES: [], SALE_TIME_DEFAULT: {}, getNextSaleTime: () => nextSaleTime, saleTimeStore: { get: async () => ({}) } };
     if (id.includes('settings/captcha')) return { captchaStore: { get: async () => ({ batchSessionLimit: 100 }) } };
     if (id.includes('platform/adapters/bigmodel/request')) return {
       setMainWorldFetcher: () => undefined,
@@ -135,7 +138,7 @@ function createContentHarness(options: {
         orderPipeline: { run: async () => options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }) },
       },
     };
-    if (id.includes('runtime-calibration')) return { calibrate: async () => ({}) };
+    if (id.includes('runtime-calibration')) return { calibrate: async () => { calibrationCalls++; return {}; } };
     throw new Error(`Unexpected import: ${id}`);
   };
   const document = {
@@ -181,6 +184,8 @@ function createContentHarness(options: {
     runnerEvents,
     get pollCalls() { return pollCalls; },
     get runnerCount() { return runnerCount; },
+    get calibrationCalls() { return calibrationCalls; },
+    setNextSaleTime(value: number) { nextSaleTime = value; },
     async start() { await contentScript.main(); },
     async command(type: string, data?: any) {
       const pending = listeners.map((listener) => listener({ source: window, data: { testc: true, type, data } }));
@@ -361,6 +366,26 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.runnerCount).toBe(0);
     expect(harness.runnerEvents).not.toContain('tickets_reserved');
     expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
+  });
+
+  it('records a quiet-window entry once per sale and records again for the next sale', async () => {
+    const now = Date.now();
+    const harness = createContentHarness({ nextSaleTime: now + 60 * 60 * 1000 });
+    await harness.start();
+    const calibrationCallsBeforeQuietWindow = harness.calibrationCalls;
+    harness.setNextSaleTime(now + 5 * 60 * 1000);
+
+    await harness.command('GET_RUNTIME_CALIBRATION');
+    await harness.command('GET_RUNTIME_CALIBRATION');
+    harness.setNextSaleTime(now + 4 * 60 * 1000);
+    await harness.command('GET_RUNTIME_CALIBRATION');
+
+    const quietEntries = harness.posted.filter((message) => message.type === 'calibration_quiet_window_entered');
+    expect(harness.calibrationCalls).toBe(calibrationCallsBeforeQuietWindow);
+    expect(quietEntries.map((message) => message.data?.nextSaleTime)).toEqual([
+      now + 5 * 60 * 1000,
+      now + 4 * 60 * 1000,
+    ]);
   });
 
   it.each([

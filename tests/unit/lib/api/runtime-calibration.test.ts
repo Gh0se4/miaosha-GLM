@@ -38,6 +38,19 @@ describe('calibrate', () => {
     expect(events).toEqual(['calibration_quiet_window_entered']);
   });
 
+  it('awaits an async quiet-window guard before deciding not to probe', async () => {
+    const events: string[] = [];
+
+    const result = await calibrate(auth, undefined, {
+      shouldContinue: async () => false,
+      onEvent: (event) => events.push(event.type),
+    });
+
+    expect(xhrRequest).not.toHaveBeenCalled();
+    expect(result.probes).toEqual([]);
+    expect(events).toEqual(['calibration_quiet_window_entered']);
+  });
+
   it('stops before the next probe when the quiet window begins during calibration', async () => {
     vi.useFakeTimers();
     xhrRequest.mockResolvedValue({ headers: {} });

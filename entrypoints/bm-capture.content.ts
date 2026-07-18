@@ -698,6 +698,7 @@ export default defineContentScript({
     // ── Runtime Calibration (1.0.0.alpha) ────────────────────────────────────
     let calibrationInFlight = false;
     let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
+    let quietWindowSaleTime: number | null = null;
 
     function selectCalibrationInterval(msUntilSale: number): number {
       if (msUntilSale <= CALIBRATION_FAST_WINDOW_MS) return CALIBRATION_FAST_INTERVAL_MS;
@@ -713,15 +714,29 @@ export default defineContentScript({
       return true;
     }
 
-    async function shouldContinueRuntimeCalibration() {
+    async function getNextRuntimeCalibrationSaleTime() {
       const cfg = await getSaleConfig();
-      return getNextSaleTime(cfg) - Date.now() > EARLY_FIRE_BOUNDARY_MS;
+      return getNextSaleTime(cfg);
+    }
+
+    async function shouldContinueRuntimeCalibration() {
+      const nextSaleTime = await getNextRuntimeCalibrationSaleTime();
+      const shouldContinue = nextSaleTime - Date.now() > EARLY_FIRE_BOUNDARY_MS;
+      if (shouldContinue) quietWindowSaleTime = null;
+      return shouldContinue;
+    }
+
+    async function recordQuietWindowEntry(reason: string) {
+      const nextSaleTime = await getNextRuntimeCalibrationSaleTime();
+      if (quietWindowSaleTime === nextSaleTime) return;
+      quietWindowSaleTime = nextSaleTime;
+      postToOverlay({ type: 'calibration_quiet_window_entered', data: { reason, nextSaleTime } });
     }
 
     async function runRuntimeCalibration(reason: string) {
       if (calibrationInFlight) return false;
       if (!(await shouldContinueRuntimeCalibration())) {
-        postToOverlay({ type: 'calibration_quiet_window_entered', data: { reason } });
+        await recordQuietWindowEntry(reason);
         return false;
       }
       calibrationInFlight = true;
@@ -736,7 +751,13 @@ export default defineContentScript({
           bigmodelProject: legacy.bigmodelProject,
         }, undefined, {
           shouldContinue: shouldContinueRuntimeCalibration,
-          onEvent: (event) => postToOverlay({ type: event.type, data: { reason, ...(event.details || {}) } }),
+          onEvent: (event) => {
+            if (event.type === 'calibration_quiet_window_entered') {
+              void recordQuietWindowEntry(reason);
+              return;
+            }
+            postToOverlay({ type: event.type, data: { reason, ...(event.details || {}) } });
+          },
         });
 
         if (!Number.isFinite(result.rttCompensationMs) || !Number.isFinite(result.clockOffsetMs) || result.probes.length === 0) {
