@@ -1130,31 +1130,35 @@ export default defineContentScript({
               updatedAt: Date.now(),
             };
             // The order is terminal once the preview response is successful.
-            // Persistence and UI failures are diagnostic-only and must not turn
-            // this shot into a network error or release another shot.
-            void (async () => {
+            // Each follow-up is isolated: a storage or overlay failure must not
+            // suppress the user-visible success signal, shot log, or payment poll.
+            const reportPostOrderFailure = (effect: string, error: unknown) => {
+              try { postToOverlay({ type: 'FIRE_RESULT', line: `> Order succeeded; ${effect} failed: ${String(error)}` }); } catch {}
+            };
+            const runPostOrderEffect = (effect: string, work: () => Promise<unknown> | unknown) => {
               try {
-                await updatePaymentState(ps);
-                postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
-                postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' });
-                postToOverlay({
-                  type: 'FIRE_SHOT_RESULT',
-                  data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
-                });
-                if (options.pollPayment) {
-                  void pollPayCheck(auth, bizId, (status) => {
-                    void updatePaymentState({ status: status === 'SUCCESS' ? 'success' : status === 'EXPIRE' ? 'expired' : 'timeout' }).catch(() => undefined);
-                    try {
-                      reportPaymentStatus(status, bizId, postToOverlay);
-                    } catch (error) {
-                      try { postToOverlay({ type: 'FIRE_RESULT', line: '> Payment status update failed: ' + String(error) }); } catch {}
-                    }
-                  });
-                }
+                void Promise.resolve(work()).catch((error) => reportPostOrderFailure(effect, error));
               } catch (error) {
-                try { postToOverlay({ type: 'FIRE_RESULT', line: '> Order succeeded; post-order update failed: ' + String(error) }); } catch {}
+                reportPostOrderFailure(effect, error);
               }
-            })();
+            };
+            runPostOrderEffect('payment persistence', () => updatePaymentState(ps));
+            runPostOrderEffect('success notification', () => postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps }));
+            runPostOrderEffect('success log', () => postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' }));
+            runPostOrderEffect('shot result log', () => postToOverlay({
+              type: 'FIRE_SHOT_RESULT',
+              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
+            }));
+            if (options.pollPayment) {
+              runPostOrderEffect('payment polling', () => pollPayCheck(auth, bizId, (status) => {
+                void updatePaymentState({ status: status === 'SUCCESS' ? 'success' : status === 'EXPIRE' ? 'expired' : 'timeout' }).catch(() => undefined);
+                try {
+                  reportPaymentStatus(status, bizId, postToOverlay);
+                } catch (error) {
+                  try { postToOverlay({ type: 'FIRE_RESULT', line: '> Payment status update failed: ' + String(error) }); } catch {}
+                }
+              }));
+            }
             return 'success';
           } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
