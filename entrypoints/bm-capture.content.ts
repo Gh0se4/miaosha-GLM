@@ -1334,18 +1334,8 @@ export default defineContentScript({
           prefireAndBurst(startMs, reason);
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
-          const authStatus = await getPrefireAuthStatus();
-          if (!authStatus.ok) {
-            postToOverlay({ type: 'FIRE_RESULT', line: '> Prefire blocked: auth unavailable' });
-            return;
-          }
-          await prepareAndRun({
-            runId: `auto-${event.data.data?.targetMs}-${Date.now()}`,
-            mode: 'auto',
-            startMs: event.data.data?.startMs ?? Date.now(),
-            authArg: authStatus.headers,
-            reason: event.data.data?.reason || 'auto',
-          });
+          const startMs: number = event.data.data?.startMs ?? Date.now();
+          await prefireAndBurst(startMs, 'auto');
         }
         if (event.data.type === 'CANCEL_FIRE') {
           currentFireRunner?.cancel();
