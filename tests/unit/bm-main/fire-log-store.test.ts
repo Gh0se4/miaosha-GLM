@@ -154,18 +154,22 @@ describe('Fire Log V2 store', () => {
     const posted: Array<Record<string, unknown>> = [];
     const window = {
       addEventListener: (_type: string, listener: (event: MessageEvent) => void) => listeners.push(listener),
-      postMessage: (message: Record<string, unknown>) => posted.push(message),
+      postMessage: (message: Record<string, unknown>) => {
+        posted.push(message);
+        for (const listener of listeners) listener({ data: message } as MessageEvent);
+      },
     };
     const scope = vm.createContext({
       window, _NS: 'test-', MSG_OVL: '__overlay',
-      document: { visibilityState: 'visible', body: { appendChild: () => {}, removeChild: () => {} }, createElement: () => ({ click: () => {} }) },
+      document, 
       sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
       navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
       Intl, Date, Math, Promise, performance: { now: () => 1 },
       setTimeout: () => 0, URL: { createObjectURL: () => '', revokeObjectURL: () => {} }, Blob,
       postToOverlay: (type: string, data: Record<string, unknown>) => window.postMessage({ __overlay: true, type, data }),
     });
-    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+    document.body.innerHTML = '';
+    for (const name of ['09-fire-viz.js', '11-fire-log-store.js', '12-fire-log.js']) {
       vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
     }
     await Promise.resolve();
@@ -176,5 +180,33 @@ describe('Fire Log V2 store', () => {
       type: 'FIRE_RESULT',
       data: expect.objectContaining({ line: expect.stringContaining('日志仅临时保存在内存，刷新页面会丢失') }),
     }));
+    expect(document.body.textContent).not.toContain('日志仅临时保存在内存，刷新页面会丢失');
+
+    (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 0, burstIntervalMs: 100 });
+    expect(document.getElementById('test-fv_log')!.textContent).toContain('日志仅临时保存在内存，刷新页面会丢失');
+    document.body.innerHTML = '';
+  });
+
+  it('renders a deferred persistence warning once when Fire Matrix opens after the warning', () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const scope = vm.createContext({
+      window: { addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener) },
+      document, _NS: 'warning-', MSG_OVL: '__overlay', Date, Math, setTimeout: () => 0,
+      navigator: { clipboard: null },
+    });
+    document.body.innerHTML = '';
+    vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main/09-fire-viz.js'), 'utf8'), scope);
+
+    const warning = '⚠ 日志仅临时保存在内存，刷新页面会丢失';
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_RESULT', data: { line: warning } } });
+    expect(document.body.textContent).not.toContain(warning);
+
+    (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 0, burstIntervalMs: 100 });
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_RESULT', data: { line: warning } } });
+
+    const log = document.getElementById('warning-fv_log')!;
+    expect(log.textContent).toContain(warning);
+    expect(log.textContent!.split(warning)).toHaveLength(2);
+    document.body.innerHTML = '';
   });
 });

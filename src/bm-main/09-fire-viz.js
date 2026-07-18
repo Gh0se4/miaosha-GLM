@@ -17,6 +17,9 @@ var _fv_shotsData = [];
 var _fv_waveCount = 0;
 var _fv_nextShotIdx = 0;
 var _fv_currentWaveStartIdx = 0;
+var _fv_persistenceWarningPending = false;
+var _fv_persistenceWarningRendered = false;
+var _FV_PERSISTENCE_WARNING = '日志仅临时保存在内存，刷新页面会丢失';
 
 var _FV_OUTCOME = {
   success:        { user: '成功',     dev: 'ORDER',                  color: '#059669', icon: '✓' },
@@ -262,6 +265,7 @@ function _fv_show(data) {
     _fv_waveCount = 0;
     _fv_nextShotIdx = 0;
     _fv_currentWaveStartIdx = 0;
+    _fv_persistenceWarningRendered = false;
 
     _fv_bindEvents();
   }
@@ -289,6 +293,14 @@ function _fv_show(data) {
     totalShots: data.totalShots,
     startMs: data.startMs
   }), '#94a3b8');
+  _fv_renderPersistenceWarning();
+}
+
+function _fv_renderPersistenceWarning() {
+  if (!_fv_persistenceWarningPending || _fv_persistenceWarningRendered) return;
+  if (!document.getElementById(_NS + 'fv')) return;
+  _fv_persistenceWarningRendered = true;
+  _fv_addLine('⚠ ' + _FV_PERSISTENCE_WARNING, '#d97706');
 }
 
 function _fv_updateWaveBadge() {
@@ -571,6 +583,12 @@ function _fv_bindEvents() {
 window.addEventListener('message', function(e) {
   if (!e.data || !e.data[MSG_OVL]) return;
   var d = e.data;
+
+  if (d.type === 'FIRE_RESULT' && d.data && String(d.data.line || '').indexOf(_FV_PERSISTENCE_WARNING) !== -1) {
+    _fv_persistenceWarningPending = true;
+    _fv_renderPersistenceWarning();
+    return;
+  }
 
   if (d.type === 'FIRE_BATCH_START') {
     _fv_show(d.data);
