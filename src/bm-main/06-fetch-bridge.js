@@ -9,6 +9,18 @@ function postMainWorldFetchEvent(type, payload) {
   window.postMessage(payload, '*');
 }
 
+function fetchFailurePayload(common, timing, error) {
+  return Object.assign({}, common, {
+    ok: false,
+    error: error,
+    status: 0,
+    statusText: '',
+    headers: {},
+    body: '',
+    timing: timing,
+  });
+}
+
 window.addEventListener('message', function(ev) {
   if (ev.source !== window || !ev.data || !ev.data[MSG_CMD]) return;
   var d = ev.data;
@@ -35,15 +47,16 @@ window.addEventListener('message', function(ev) {
   timing.responseHeadersAt = timing.fetchCalledAt;
   timing.bodyCompletedAt = timing.fetchCalledAt;
   var common = { requestId: requestId, reqId: requestId, runId: d.runId, shotId: d.shotId };
+  if (typeof requestId !== 'string' || !requestId) {
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload({ requestId: null, reqId: null }, timing, 'invalid requestId'));
+    return;
+  }
+  if (activeMainWorldFetches.has(requestId)) return;
   var url = String(opts.url || '');
   if (url.indexOf('://bigmodel.cn/') === -1 &&
       url.indexOf('://www.bigmodel.cn/') === -1 &&
       url.indexOf('://www.volcengine.com/') === -1) {
-    postMainWorldFetchEvent('DO_FETCH_RESULT', Object.assign({}, common, {
-      ok: false,
-      error: 'blocked',
-      timing: timing,
-    }));
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, 'blocked'));
     return;
   }
 
@@ -70,20 +83,29 @@ window.addEventListener('message', function(ev) {
   timing.fetchCalledPerfMs = performance.now();
   timing.responseHeadersAt = timing.fetchCalledAt;
   timing.bodyCompletedAt = timing.fetchCalledAt;
+  var fetchPromise;
+  try {
+    fetchPromise = window.fetch(opts.url, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body || undefined,
+      credentials: 'include',
+      mode: 'cors',
+      cache: 'no-cache',
+      redirect: 'follow',
+      referrer: location.origin + '/glm-coding',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      signal: controller.signal,
+    });
+  } catch (err) {
+    entry.settled = true;
+    activeMainWorldFetches.delete(requestId);
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, (err && err.message) || 'fetch error'));
+    return;
+  }
   postMainWorldFetchEvent('DO_FETCH_STARTED', Object.assign({}, common, { timing: timing }));
 
-  window.fetch(opts.url, {
-    method: opts.method || 'GET',
-    headers: headers,
-    body: opts.body || undefined,
-    credentials: 'include',
-    mode: 'cors',
-    cache: 'no-cache',
-    redirect: 'follow',
-    referrer: location.origin + '/glm-coding',
-    referrerPolicy: 'strict-origin-when-cross-origin',
-    signal: controller.signal,
-  })
+  Promise.resolve(fetchPromise)
     .then(function(response) {
       timing.responseHeadersAt = Date.now();
       var responseHeaders = {};
@@ -107,10 +129,6 @@ window.addEventListener('message', function(ev) {
       if (entry.cancelled || entry.settled) return;
       entry.settled = true;
       activeMainWorldFetches.delete(requestId);
-      postMainWorldFetchEvent('DO_FETCH_RESULT', Object.assign({}, common, {
-        ok: false,
-        error: err.message || 'fetch error',
-        timing: timing,
-      }));
+      postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, (err && err.message) || 'fetch error'));
     });
 });

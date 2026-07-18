@@ -12,14 +12,18 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function loadBridge(fetch: ReturnType<typeof vi.fn>) {
+function loadBridge(fetch: ReturnType<typeof vi.fn>, onPost?: (message: Message) => void) {
   const listeners: Array<(event: MessageEvent) => void> = [];
   const posted: Message[] = [];
   let wall = 1_000;
   let perf = 100;
   const window = {
     addEventListener: vi.fn((_type: string, listener: (event: MessageEvent) => void) => listeners.push(listener)),
-    postMessage: vi.fn((message: Message) => posted.push(structuredClone(message))),
+    postMessage: vi.fn((message: Message) => {
+      const cloned = structuredClone(message);
+      posted.push(cloned);
+      onPost?.(cloned);
+    }),
     fetch,
   };
   const scope = vm.createContext({
@@ -99,6 +103,59 @@ describe('MAIN world fetch bridge protocol', () => {
     for (const message of bridge.posted) {
       expect(message).toMatchObject({ requestId: 'legacy-1', reqId: 'legacy-1' });
     }
+  });
+
+  it('calls fetch before STARTED and reports a synchronous fetch failure without STARTED', async () => {
+    const fetch = vi.fn().mockImplementationOnce(() => {
+      throw new Error('sync failure');
+    }).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: new Map(),
+      text: () => Promise.resolve('ok'),
+    });
+    const observedFetchCalls: number[] = [];
+    const bridge = loadBridge(fetch, (message) => {
+      if (message.type === 'DO_FETCH_STARTED') observedFetchCalls.push(fetch.mock.calls.length);
+    });
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'sync-fail', opts: { url: 'https://bigmodel.cn/api/test' } });
+    await flush();
+    expect(bridge.posted).toHaveLength(1);
+    expect(bridge.posted[0]).toMatchObject({ type: 'DO_FETCH_RESULT', ok: false, status: 0, statusText: '', headers: {}, body: '' });
+    expect(bridge.posted[0].timing).toMatchObject({ responseHeadersAt: expect.any(Number), bodyCompletedAt: expect.any(Number) });
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'started-after-fetch', opts: { url: 'https://bigmodel.cn/api/test' } });
+    await flush();
+    expect(observedFetchCalls).toEqual([2]);
+  });
+
+  it('isolates duplicate requestId while the original request is active', async () => {
+    const pending = deferred<{ status: number; statusText: string; headers: Map<string, string>; text: () => Promise<string> }>();
+    const fetch = vi.fn().mockReturnValue(pending.promise);
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'same-id', opts: { url: 'https://bigmodel.cn/api/test' } });
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'same-id', opts: { url: 'https://bigmodel.cn/api/test' } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    pending.resolve({ status: 200, statusText: 'OK', headers: new Map(), text: () => Promise.resolve('original') });
+    await flush();
+    expect(bridge.posted.filter((message) => message.type === 'DO_FETCH_RESULT')).toEqual([
+      expect.objectContaining({ requestId: 'same-id', ok: true, body: 'original' }),
+    ]);
+  });
+
+  it('rejects a missing requestId without starting a fetch', async () => {
+    const fetch = vi.fn();
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', opts: { url: 'https://bigmodel.cn/api/test' } });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(bridge.posted).toEqual([
+      expect.objectContaining({ type: 'DO_FETCH_RESULT', ok: false, error: 'invalid requestId', requestId: null, reqId: null }),
+    ]);
   });
 
   it('aborts a matching request and suppresses its late result', async () => {
