@@ -3,6 +3,7 @@
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
 import type { AutoFirePlanShot } from '../lib/api/fire-plan';
+import { createFirePreparationCancellation, runAfterFirePreparation, type FirePreparationCancellation } from '../lib/api/fire-preparation';
 import { FireRunner } from '../lib/api/fire-runner';
 import { buildFireSchedule } from '../lib/api/fire-scheduler';
 import { reportPaymentStatus } from '../lib/api/payment-status-notifier';
@@ -899,11 +900,13 @@ export default defineContentScript({
       return { count: tickets.length, tickets };
     }
 
-    async function getLaunchSnapshot() {
+    async function getLaunchSnapshot(cancellation?: FirePreparationCancellation) {
       await ensureTicketStoreReady();
+      if (cancellation?.cancelled) return null;
       const now = Date.now();
       const valid = _ticketPool.filter((t: any) => now - t.createdAt < TICKET_TTL_MS);
       const selData = await safeGet<any>('local:selectedProducts');
+      if (cancellation?.cancelled) return null;
       const targets: StrikeTarget[] = (selData?.priorityList || [])
         .filter((item: any) => item && item.productId)
         .slice(0, 3)
@@ -914,6 +917,7 @@ export default defineContentScript({
       } catch {
         fireConfig = { ...FIRE_CONFIG_DEFAULT };
       }
+      if (cancellation?.cancelled) return null;
       return { valid, targets, fireConfig };
     }
 
@@ -978,6 +982,7 @@ export default defineContentScript({
     // ── Unified strike sequence: shared by default strike and burst mode ──
     let currentStrikeCancel: (() => void) | null = null;
     let currentFireRunner: FireRunner | null = null;
+    let currentFirePreparationCancellation: FirePreparationCancellation | null = null;
     let preparingFireRun = false;
     let lastShotSentAt = 0;
 
@@ -996,14 +1001,39 @@ export default defineContentScript({
         return;
       }
       preparingFireRun = true;
+      const preparationCancellation = createFirePreparationCancellation();
+      currentFirePreparationCancellation = preparationCancellation;
+      const finishPreparationCancellation = () => {
+        if (currentFirePreparationCancellation === preparationCancellation) {
+          currentFirePreparationCancellation = null;
+        }
+      };
+      const reportPreparationCancelled = () => {
+        finishPreparationCancellation();
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
+      };
       try {
       const auth = coerceToPlatformAuth(authArg);
+      if (preparationCancellation.cancelled) {
+        reportPreparationCancelled();
+        return;
+      }
       if (!auth) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
 
-      const { valid, targets, fireConfig } = await getLaunchSnapshot();
+      let launchSnapshot: Awaited<ReturnType<typeof getLaunchSnapshot>>;
+      const preparationResult = await runAfterFirePreparation({
+        cancellation: preparationCancellation,
+        preflight: () => getLaunchSnapshot(preparationCancellation),
+        onReady: (snapshot) => { launchSnapshot = snapshot; },
+      });
+      if (preparationResult === 'cancelled' || !launchSnapshot || preparationCancellation.cancelled) {
+        reportPreparationCancelled();
+        return;
+      }
+      const { valid, targets, fireConfig } = launchSnapshot;
       if (valid.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No valid tickets' });
         return;
@@ -1014,6 +1044,10 @@ export default defineContentScript({
       }
 
       const plan = buildStrikeQueue({ tickets: valid, targets });
+      if (preparationCancellation.cancelled) {
+        reportPreparationCancelled();
+        return;
+      }
       if (plan.shots.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike queue empty' });
         return;
@@ -1218,6 +1252,7 @@ export default defineContentScript({
       });
       currentFireRunner = runner;
       currentStrikeCancel = cancelAll;
+      finishPreparationCancellation();
       const result = await runner.run();
       if (!result.accepted) {
         if (currentFireRunner === runner) currentFireRunner = null;
@@ -1232,6 +1267,7 @@ export default defineContentScript({
       currentStrikeCancel = null;
       if (currentFireRunner === runner) currentFireRunner = null;
       } finally {
+        finishPreparationCancellation();
         preparingFireRun = false;
       }
     }
@@ -1337,6 +1373,9 @@ export default defineContentScript({
           await prefireAndBurst(fireStartMs, 'auto');
         }
         if (event.data.type === 'CANCEL_FIRE') {
+          if (preparingFireRun && !currentFireRunner) {
+            currentFirePreparationCancellation?.cancel();
+          }
           currentFireRunner?.cancel();
           currentStrikeCancel?.();
         }
