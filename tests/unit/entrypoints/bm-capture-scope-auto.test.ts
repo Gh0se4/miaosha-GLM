@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vm from 'vm';
 import { buildFireSchedule } from '../../../lib/api/fire-scheduler';
 
 const AUTO_SOURCE = path.resolve(__dirname, '../../../src/bm-main/07-auto-fire.js');
@@ -11,15 +12,35 @@ function source(pathname: string) {
 }
 
 describe('auto fire prepare-run lifecycle', () => {
-  it('dispatches an explicit prepare payload without a hidden -500ms offset', () => {
+  it('prepares three seconds before the compensated first-fetch time', () => {
     const auto = source(AUTO_SOURCE);
+    const messages: unknown[] = [];
+    const timers: Array<{ callback: () => void; delay: number }> = [];
+    class FakeDate extends Date {
+      static now() { return 1_000; }
+    }
+    const context = {
+      _rt: { latencyMs: 700, clockOffsetMs: 200, autoTimer: null, countdownTimer: null, autoFired: false, nextSaleTime: 0 },
+      MSG_CMD: '__cmd',
+      Date: FakeDate,
+      document: { getElementById: () => null },
+      window: { postMessage: (message: unknown) => messages.push(message) },
+      setTimeout: (callback: () => void, delay: number) => { timers.push({ callback, delay }); return timers.length; },
+      clearTimeout: () => undefined,
+      setInterval: () => 0,
+      clearInterval: () => undefined,
+    };
+    const api = vm.runInNewContext(`${auto}; ({ scheduleAutoFire })`, context) as { scheduleAutoFire(nextSaleTime: number): void };
 
-    expect(auto).toContain("type: 'PREFIRE_PREPARE'");
-    expect(auto).toContain('preparationLeadMs: 3000');
-    expect(auto).toContain('earlyOffsetMs: 3000');
-    expect(auto).toContain('startMs: _rt.nextSaleTime - _rt.latencyMs - 3000 - _rt.clockOffsetMs');
-    expect(auto).not.toContain('PREFIRE_FIRE');
-    expect(auto).not.toMatch(/startMs\s*-\s*500/);
+    api.scheduleAutoFire(10_000);
+
+    expect(timers[0]?.delay).toBe(5_100);
+    timers[0]?.callback();
+    expect(messages).toEqual([{
+      __cmd: true,
+      type: 'PREFIRE_PREPARE',
+      data: expect.objectContaining({ prepareAtMs: 6_100, fireStartMs: 9_100, preparationLeadMs: 3_000 }),
+    }]);
   });
 
   it('routes prepare, manual, and burst requests through the one FireRunner lifecycle', () => {
@@ -29,7 +50,7 @@ describe('auto fire prepare-run lifecycle', () => {
     expect(content).toContain("from '../lib/api/fire-runner'");
     expect(content).toContain('async function prepareAndRun(');
     expect(content).toContain("event.data.type === 'PREFIRE_PREPARE'");
-    expect(content).toContain('runId: `auto-${startMs}-${Date.now()}`');
+    expect(content).toContain('runId: `auto-${fireStartMs}-${Date.now()}`');
     expect(content).toContain('new FireRunner(');
     expect(content).toContain('maxInFlight: options.mode === \'burst\' ? 2 : 1');
   });
@@ -40,7 +61,7 @@ describe('auto fire prepare-run lifecycle', () => {
     const end = content.indexOf("if (event.data.type === 'CANCEL_FIRE')", start);
     const prepareHandler = content.slice(start, end);
 
-    expect(prepareHandler).toContain("prefireAndBurst(startMs, 'auto')");
+    expect(prepareHandler).toContain("prefireAndBurst(fireStartMs, 'auto')");
     expect(prepareHandler).not.toContain('getPrefireAuthStatus()');
     expect(prepareHandler).not.toContain('prepareAndRun({');
     expect(content.match(/await runAutoFirePlan\(startMs, authStatus\.headers\)/g)).toHaveLength(1);

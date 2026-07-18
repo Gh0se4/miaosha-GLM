@@ -20,7 +20,7 @@ async function flush() {
   await Promise.resolve();
 }
 
-function makeInput(overrides: Partial<FireRunInput> = {}) {
+function makeInput(overrides: Partial<FireRunInput> = {}, transportStarts = true) {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const starts: Array<{ shotId: string; at: number }> = [];
   let now = 0;
@@ -41,6 +41,12 @@ function makeInput(overrides: Partial<FireRunInput> = {}) {
       return { outcome: 'neterr' };
     },
     ...overrides,
+  };
+
+  const executeShot = input.executeShot;
+  input.executeShot = async (ctx) => {
+    if (transportStarts) ctx.onFetchStarted({ fetchStartedAt: now });
+    return executeShot(ctx);
   };
 
   return {
@@ -88,7 +94,7 @@ describe('FireRunner', () => {
         started.push(shotId);
         return pending[Number(shotId.slice(1)) - 1].promise;
       },
-    });
+    }, false);
     const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
     const running = runner.run();
 
@@ -108,7 +114,7 @@ describe('FireRunner', () => {
         started.push(shotId);
         return pending[Number(shotId.slice(1)) - 1].promise;
       },
-    });
+    }, false);
     const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
     const running = runner.run();
 
@@ -158,6 +164,51 @@ describe('FireRunner', () => {
 
     await runner.run();
     expect(fixture.starts).toEqual([{ shotId: 's1', at: 0 }, { shotId: 's2', at: 50 }]);
+  });
+
+  it('consumes a ticket only when the transport reports fetch-started', async () => {
+    const started: string[] = [];
+    const fixture = makeInput({
+      slots: [{ shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 }],
+      executeShot: async ({ shotId, onFetchStarted }) => {
+        started.push(shotId);
+        expect(runner.snapshot()[0]?.state).toBe('released');
+        onFetchStarted({ fetchStartedAt: 123 });
+        return { outcome: 'neterr' };
+      },
+    }, false);
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await runner.run();
+
+    expect(started).toEqual(['s1']);
+    expect(runner.snapshot()).toMatchObject([{ state: 'settled', fetchStartedAt: 123 }]);
+  });
+
+  it('returns an in-flight ticket when cancellation happens before transport start and aborts it', async () => {
+    const pending = deferred<{ outcome: Outcome }>();
+    const abort = vi.fn();
+    let requestId = '';
+    const fixture = makeInput({
+      slots: [{ shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 }],
+      executeShot: async (ctx) => {
+        requestId = ctx.requestId;
+        const { setAbort } = ctx;
+        setAbort(abort);
+        return pending.promise;
+      },
+    }, false);
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+    const running = runner.run();
+
+    await flush();
+    runner.cancel();
+    pending.resolve({ outcome: 'cancelled' });
+    await running;
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(requestId).toBe('run-1:s1:0');
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['returned']);
   });
 
   it('success stops and returns unsent tickets', async () => {

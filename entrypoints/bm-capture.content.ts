@@ -692,6 +692,12 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
       if (timeout !== undefined) clearTimeout(timeout);
       fn();
     };
+    const abort = () => {
+      if (settled) return;
+      window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH_CANCEL', requestId }, '*');
+      finish(() => reject(new Error('MAIN world fetch aborted')));
+    };
+    opts.onAbortReady?.(abort);
     function handler(ev: MessageEvent) {
       const incomingRequestId = ev.data?.requestId ?? ev.data?.reqId;
       if (ev.source !== window || !ev.data?.[MSG_EVT] || incomingRequestId !== requestId) return;
@@ -719,8 +725,7 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
     window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', requestId, runId: opts.runId, shotId: opts.shotId, opts }, '*');
     timeout = setTimeout(() => {
       if (settled) return;
-      window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH_CANCEL', requestId }, '*');
-      finish(() => reject(new Error("MAIN world fetch timeout")));
+      abort();
     }, 8000);
   });
 }
@@ -911,18 +916,6 @@ export default defineContentScript({
       return { valid, targets, fireConfig };
     }
 
-    async function getAutoFireSnapshot() {
-      await ensureTicketStoreReady();
-      const now = Date.now();
-      const valid = _ticketPool.filter((t: any) => now - t.createdAt < TICKET_TTL_MS);
-      const selData = await safeGet<any>('local:selectedProducts');
-      const selectedIds: string[] = (selData?.priorityList || [])
-        .filter((item: any) => item && item.productId)
-        .slice(0, 3)
-        .map((item: any) => String(item.productId));
-      return { valid, selectedIds };
-    }
-
     // ── Poll payment status ──
     async function pollPayCheck(
       authArg: any,
@@ -971,15 +964,13 @@ export default defineContentScript({
     }
 
     // ── Alpha Auto-Fire execution ────────────────────────────────────────────
-    async function runAutoFirePlan(startMs: number, authArg: any) {
-      const { valid, selectedIds } = await getAutoFireSnapshot();
+    async function runAutoFirePlan(fireStartMs: number, authArg: any) {
       // Auto mode uses the same explicit runner lifecycle as manual mode.
       await prepareAndRun({
-        runId: `auto-${startMs}-${Date.now()}`,
+        runId: `auto-${fireStartMs}-${Date.now()}`,
         mode: 'auto',
-        startMs,
+        startMs: fireStartMs,
         authArg,
-        reason: 'auto',
       });
     }
 
@@ -1060,16 +1051,22 @@ export default defineContentScript({
 
       const total = plan.shots.length;
 
-      const fireOne = async (shot: StrikeShot, idx: number): Promise<string> => {
+      const fireOne = async (shot: StrikeShot, idx: number, fireRequest: { requestId: string; onFetchStarted(meta?: { fetchStartedAt?: number }): void; setAbort(abort: () => void): void }): Promise<string> => {
         if (cancelled) return 'cancelled';
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
         try {
-          const result = await bigmodelAdapter.orderPipeline.run({
+          const result = await (bigmodelAdapter.orderPipeline as any).run({
             platform: 'bigmodel',
             productId: shot.productId,
             ticket: { ticket: shot.ticket, randstr: shot.randstr, provider: 'tencent-captcha', createdAt: shot.createdAt },
-          }, auth);
+          }, auth, {
+            requestId: fireRequest.requestId,
+            runId: options.runId || `${options.mode}-${startMs}`,
+            shotId: `shot-${idx}`,
+            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt }),
+            onAbortReady: fireRequest.setAbort,
+          });
           if (cancelled) return 'cancelled';
           const rtt = Date.now() - t1;
 
@@ -1087,30 +1084,28 @@ export default defineContentScript({
               status: 'pending' as const,
               updatedAt: Date.now(),
             };
-            await updatePaymentState(ps);
-            postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
-            postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' });
-            postToOverlay({
-              type: 'FIRE_SHOT_RESULT',
-              data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
-            });
-            if (options.pollPayment) {
-              void pollPayCheck(auth, bizId, (status) => {
-                if (status === 'SUCCESS') {
-                  void updatePaymentState({ status: 'success' });
-                  postToOverlay({ type: 'STRIKE_PAYMENT_SUCCESS', data: { bizId, orderId: bizId } });
-                  postToOverlay({ type: 'FIRE_RESULT', line: '> Payment confirmed bizId=' + String(bizId).slice(-8) });
-                } else if (status === 'EXPIRE') {
-                  void updatePaymentState({ status: 'expired' });
-                  postToOverlay({ type: 'STRIKE_PAYMENT_EXPIRED', data: { bizId, orderId: bizId } });
-                  postToOverlay({ type: 'FIRE_RESULT', line: '> Payment expired bizId=' + String(bizId).slice(-8) });
-                } else {
-                  void updatePaymentState({ status: 'timeout' });
-                  postToOverlay({ type: 'STRIKE_PAYMENT_TIMEOUT', data: { bizId, orderId: bizId } });
-                  postToOverlay({ type: 'FIRE_RESULT', line: '> Payment status timeout bizId=' + String(bizId).slice(-8) });
+            // The order is terminal once the preview response is successful.
+            // Persistence and UI failures are diagnostic-only and must not turn
+            // this shot into a network error or release another shot.
+            void (async () => {
+              try {
+                await updatePaymentState(ps);
+                postToOverlay({ type: 'BURST_FIRE_SUCCESS', data: ps });
+                postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ORDER bizId=' + bizId + ' (' + rtt + 'ms)' });
+                postToOverlay({
+                  type: 'FIRE_SHOT_RESULT',
+                  data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'success', code: 200, rtt, sentAt: t1, bizId, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), serverMsg: '' },
+                });
+                if (options.pollPayment) {
+                  void pollPayCheck(auth, bizId, (status) => {
+                    void updatePaymentState({ status: status === 'SUCCESS' ? 'success' : status === 'EXPIRE' ? 'expired' : 'timeout' }).catch(() => undefined);
+                    postToOverlay({ type: status === 'SUCCESS' ? 'STRIKE_PAYMENT_SUCCESS' : status === 'EXPIRE' ? 'STRIKE_PAYMENT_EXPIRED' : 'STRIKE_PAYMENT_TIMEOUT', data: { bizId, orderId: bizId } });
+                  });
                 }
-              });
-            }
+              } catch (error) {
+                try { postToOverlay({ type: 'FIRE_RESULT', line: '> Order succeeded; post-order update failed: ' + String(error) }); } catch {}
+              }
+            })();
             return 'success';
           } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
@@ -1164,7 +1159,7 @@ export default defineContentScript({
               rtt: Date.now() - t1,
               sentAt: t1,
               ticketMask: maskTicket(shot.ticket),
-              rawBody: getRawBody(result), serverMsg: cls.serverMsg,
+              rawBody: '', serverMsg: cls.serverMsg,
               rawServerMsg: cls.rawServerMsg,
               responsibility: cls.responsibility,
             },
@@ -1208,10 +1203,10 @@ export default defineContentScript({
             postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — returned unused tickets' });
           }
         },
-        executeShot: async ({ shotId, requestSeq }) => {
+        executeShot: async ({ shotId, requestSeq, requestId, onFetchStarted, setAbort }) => {
           const shot = shotsById.get(shotId);
           if (!shot) return { outcome: 'error' as const };
-          const outcome = await fireOne(shot, requestSeq);
+          const outcome = await fireOne(shot, requestSeq, { requestId, onFetchStarted, setAbort });
           postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${requestSeq + 1}/${total})` });
           return { outcome: (['success', 'busy', 'soldout', 'neterr', 'cancelled'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'cancelled' };
         },
@@ -1241,7 +1236,6 @@ export default defineContentScript({
       mode: 'manual' | 'burst' | 'auto';
       startMs: number;
       authArg?: any;
-      reason?: string;
     }) {
       const mode = input.mode;
       const label = mode === 'burst' ? 'BURST' : mode === 'auto' ? 'Auto' : 'Strike';
@@ -1261,7 +1255,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', startMs, authArg: auth, reason: 'manual' });
+      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', startMs, authArg: auth });
     }
 
     async function burstStrike(startMs: number, authOverride?: any) {
@@ -1270,7 +1264,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', startMs, authArg: auth, reason: 'burst' });
+      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', startMs, authArg: auth });
     }
 
     async function prefireAndBurst(startMs: number, reason: string) {
@@ -1334,8 +1328,8 @@ export default defineContentScript({
           prefireAndBurst(startMs, reason);
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
-          const startMs: number = event.data.data?.startMs ?? Date.now();
-          await prefireAndBurst(startMs, 'auto');
+          const fireStartMs: number = event.data.data?.fireStartMs ?? event.data.data?.startMs ?? Date.now();
+          await prefireAndBurst(fireStartMs, 'auto');
         }
         if (event.data.type === 'CANCEL_FIRE') {
           currentFireRunner?.cancel();

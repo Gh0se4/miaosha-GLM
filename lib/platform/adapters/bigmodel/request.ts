@@ -17,6 +17,7 @@ export interface XhrRequestOptions {
   runId?: string;
   shotId?: string;
   onFetchStarted?: (meta: { timing: MainWorldTransportTiming; requestId: string }) => void;
+  onAbortReady?: (abort: () => void) => void;
 }
 
 export interface XhrResponse<T = unknown> {

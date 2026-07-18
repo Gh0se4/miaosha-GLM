@@ -4,11 +4,12 @@ function scheduleAutoFire(nextSaleTime) {
   _rt.autoFired = false;
   _rt.nextSaleTime = nextSaleTime;
 
-  var EARLY_MS = 3000; // give the content script an explicit preparation window
-  // Server-aligned baseline: offset > 0 means server clock is ahead of local clock.
-  var fireAtServer = nextSaleTime - _rt.latencyMs - EARLY_MS;
-  var nowServer = Date.now() + _rt.clockOffsetMs;
-  var delay = fireAtServer - nowServer;
+  var PREPARATION_LEAD_MS = 3000;
+  // targetMs is server-aligned. Convert the compensated first-fetch target to
+  // local epoch once, then schedule preparation separately from the first slot.
+  var fireStartMs = nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs;
+  var prepareAtMs = fireStartMs - PREPARATION_LEAD_MS;
+  var delay = prepareAtMs - Date.now();
 
   var autoEl = document.getElementById('_auto');
 
@@ -24,7 +25,7 @@ function scheduleAutoFire(nextSaleTime) {
 
   // Countdown display (100ms refresh)
   _rt.countdownTimer = setInterval(function() {
-    var remaining = fireAtServer - (Date.now() + _rt.clockOffsetMs);
+    var remaining = prepareAtMs - Date.now();
     var autoEl2 = document.getElementById('_auto');
     if (remaining <= 0) {
       clearInterval(_rt.countdownTimer);
@@ -48,16 +49,17 @@ function dispatchAutoFire() {
   if (autoEl) autoEl.textContent = 'Fired @ ' + ts.slice(11);
   var lg = document.getElementById('_log');
   if (lg) lg.innerHTML += '> Auto-fire dispatched @ ' + ts + '<br>';
-  // Convert the server-aligned preparation point back to local epoch. The
-  // content script receives all timing inputs explicitly; do not hide a second
-  // offset in this dispatch.
+  // Preparation is dispatched before the first fetch slot. The content script
+  // uses fireStartMs for FireRunner, never the preparation timestamp.
   window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_PREPARE', data: {
     targetMs: _rt.nextSaleTime,
     preparationLeadMs: 3000,
-    startMs: _rt.nextSaleTime - _rt.latencyMs - 3000 - _rt.clockOffsetMs,
+    prepareAtMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs - 3000,
+    fireStartMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs,
+    startMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs,
     rttCompensationMs: _rt.latencyMs,
     clockOffsetMs: _rt.clockOffsetMs,
-    earlyOffsetMs: 3000,
+    earlyOffsetMs: 0,
     reason: 'auto'
   } }, '*');
 }

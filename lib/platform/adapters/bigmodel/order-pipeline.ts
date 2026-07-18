@@ -6,7 +6,15 @@ import type {
   PlatformAuth,
 } from '../../types';
 import { isBigmodelAuthValid } from './auth-probe';
-import { xhrRequest } from './request';
+import { xhrRequest, type MainWorldTransportTiming } from './request';
+
+export interface BigmodelFireRequestContext {
+  requestId: string;
+  runId: string;
+  shotId: string;
+  onFetchStarted(meta: { timing: MainWorldTransportTiming; requestId: string }): void;
+  onAbortReady(abort: () => void): void;
+}
 
 export interface BigmodelPreviewResponse {
   code: number;
@@ -66,6 +74,7 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
   async run(
     ctx: OrderContext,
     auth: PlatformAuth,
+    fireRequest?: BigmodelFireRequestContext,
   ): Promise<OperationResult<PaymentSession>> {
     if (!isBigmodelAuthValid(auth)) {
       return { success: false, error: 'bigmodel auth invalid' };
@@ -92,6 +101,11 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
           ticket: ctx.ticket.ticket,
           randstr: ctx.ticket.randstr || '',
         }),
+        requestId: fireRequest?.requestId,
+        runId: fireRequest?.runId,
+        shotId: fireRequest?.shotId,
+        onFetchStarted: fireRequest?.onFetchStarted,
+        onAbortReady: fireRequest?.onAbortReady,
       });
       const body = res.data;
 

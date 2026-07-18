@@ -31,7 +31,14 @@ export interface FireRunInput {
     plannedAt: number;
   }>;
   onEvent(evt: { type: string; payload: Record<string, unknown> }): void;
-  executeShot(ctx: { shotId: string; productId: string; requestSeq: number }): Promise<{
+  executeShot(ctx: {
+    shotId: string;
+    productId: string;
+    requestSeq: number;
+    requestId: string;
+    onFetchStarted(meta?: { fetchStartedAt?: number }): void;
+    setAbort(abort: () => void): void;
+  }): Promise<{
     outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
   }>;
   onStateChange?(snapshot: FireShotState[]): void;
@@ -57,6 +64,7 @@ export class FireRunner {
   private cancelled = false;
   private cancelWake?: () => void;
   private readonly cancelSignal: Promise<void>;
+  private readonly aborts = new Map<string, () => void>();
 
   constructor(
     private readonly input: FireRunInput,
@@ -84,6 +92,13 @@ export class FireRunner {
   cancel(): void {
     if (this.cancelled) return;
     this.cancelled = true;
+    for (const abort of this.aborts.values()) {
+      try {
+        abort();
+      } catch {
+        // Cancellation must still return tickets when a transport abort observer fails.
+      }
+    }
     this.cancelWake?.();
   }
 
@@ -128,19 +143,9 @@ export class FireRunner {
 
           this.release(next);
           if (this.cancelled) break;
-          const fetchStartedAt = this.now();
-          lastFetchStartedAt = fetchStartedAt;
-          next.fetchStartedAt = fetchStartedAt;
-          this.transition(next, 'fetch-started');
-          this.event('fetch_started', {
-            runId: this.input.runId,
-            shotId: next.shotId,
-            requestSeq: next.requestSeq,
-            fetchStartedAt,
-          });
-
           const work = this.execute(next)
-            .then((outcome) => {
+            .then(({ outcome, fetchStartedAt }) => {
+              if (fetchStartedAt !== undefined) lastFetchStartedAt = fetchStartedAt;
               if (outcome === 'success' || outcome === 'waf') {
                 stopReason = outcome;
               } else if (outcome === 'cancelled') {
@@ -178,18 +183,43 @@ export class FireRunner {
     }
   }
 
-  private async execute(shot: FireShotState): Promise<'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled'> {
+  private async execute(shot: FireShotState): Promise<{
+    outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
+    fetchStartedAt?: number;
+  }> {
+    const requestId = `${this.input.runId}:${shot.shotId}:${shot.requestSeq}`;
+    let fetchStartedAt: number | undefined;
+    const onFetchStarted = (meta: { fetchStartedAt?: number } = {}) => {
+      if (shot.state !== 'released') return;
+      fetchStartedAt = meta.fetchStartedAt ?? this.now();
+      shot.fetchStartedAt = fetchStartedAt;
+      this.transition(shot, 'fetch-started');
+      this.event('fetch_started', {
+        runId: this.input.runId,
+        shotId: shot.shotId,
+        requestSeq: shot.requestSeq,
+        requestId,
+        fetchStartedAt,
+      });
+    };
     try {
       const result = await this.input.executeShot({
         shotId: shot.shotId,
         productId: shot.productId,
         requestSeq: shot.requestSeq,
+        requestId,
+        onFetchStarted,
+        setAbort: (abort) => {
+          if (typeof abort === 'function') this.aborts.set(requestId, abort);
+        },
       });
-      this.transition(shot, 'settled');
-      return result.outcome;
+      if (shot.state === 'fetch-started') this.transition(shot, 'settled');
+      return { outcome: result.outcome, fetchStartedAt };
     } catch {
-      this.transition(shot, 'settled');
-      return 'neterr';
+      if (shot.state === 'fetch-started') this.transition(shot, 'settled');
+      return { outcome: 'neterr', fetchStartedAt };
+    } finally {
+      this.aborts.delete(requestId);
     }
   }
 
