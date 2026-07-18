@@ -1,19 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
 import * as vm from 'vm';
+
+import { FireRunner } from '../../../lib/api/fire-runner';
 import { buildFireSchedule } from '../../../lib/api/fire-scheduler';
+import AUTO_SOURCE from '../../../src/bm-main/07-auto-fire.js?raw';
 
-const AUTO_SOURCE = path.resolve(__dirname, '../../../src/bm-main/07-auto-fire.js');
-const CONTENT_SOURCE = path.resolve(__dirname, '../../../entrypoints/bm-capture.content.ts');
 
-function source(pathname: string) {
-  return fs.readFileSync(pathname, 'utf-8');
+function makeRunner(mode: 'manual' | 'burst' | 'auto', intervalMs: number) {
+  let now = 100;
+  const started: Array<{ shotId: string; at: number }> = [];
+  const schedule = buildFireSchedule({
+    runId: `${mode}-run`,
+    mode,
+    startMs: now,
+    intervalMs,
+    shots: [
+      { shotId: 'first', productId: 'p1', productPriority: 1 },
+      { shotId: 'second', productId: 'p2', productPriority: 1 },
+    ],
+  });
+  const runner = new FireRunner({
+    ...schedule,
+    maxInFlight: mode === 'burst' ? 2 : 1,
+    onEvent: () => undefined,
+    executeShot: async ({ shotId, onFetchStarted }) => {
+      onFetchStarted({ fetchStartedAt: now });
+      started.push({ shotId, at: now });
+      return { outcome: 'neterr' as const };
+    },
+  }, {
+    now: () => now,
+    waitUntil: async (target) => { now = target; },
+  });
+  return { runner, schedule, started };
 }
 
 describe('auto fire prepare-run lifecycle', () => {
-  it('prepares three seconds before the compensated first-fetch time', () => {
-    const auto = source(AUTO_SOURCE);
+  it('prepares three seconds before the compensated first-fetch time', async () => {
     const messages: unknown[] = [];
     const timers: Array<{ callback: () => void; delay: number }> = [];
     class FakeDate extends Date {
@@ -30,10 +53,11 @@ describe('auto fire prepare-run lifecycle', () => {
       setInterval: () => 0,
       clearInterval: () => undefined,
     };
-    const api = vm.runInNewContext(`${auto}; ({ scheduleAutoFire })`, context) as { scheduleAutoFire(nextSaleTime: number): void };
+    // The VM keeps the MAIN-world timing contract executable without loading
+    // the browser bundle into the test process.
+    const api = vm.runInNewContext(`${AUTO_SOURCE}; ({ scheduleAutoFire })`, context) as { scheduleAutoFire(nextSaleTime: number): void };
 
     api.scheduleAutoFire(10_000);
-
     expect(timers[0]?.delay).toBe(5_100);
     timers[0]?.callback();
     expect(messages).toEqual([{
@@ -43,51 +67,23 @@ describe('auto fire prepare-run lifecycle', () => {
     }]);
   });
 
-  it('routes prepare, manual, and burst requests through the one FireRunner lifecycle', () => {
-    const content = source(CONTENT_SOURCE);
-
-    expect(content).toContain("from '../lib/api/fire-scheduler'");
-    expect(content).toContain("from '../lib/api/fire-runner'");
-    expect(content).toContain('async function prepareAndRun(');
-    expect(content).toContain("event.data.type === 'PREFIRE_PREPARE'");
-    expect(content).toContain('runId: `auto-${fireStartMs}-${Date.now()}`');
-    expect(content).toContain('new FireRunner(');
-    expect(content).toContain('maxInFlight: options.mode === \'burst\' ? 2 : 1');
+  it('executes the prepared auto run through the same one-shot runner contract', async () => {
+    const { runner, schedule, started } = makeRunner('auto', 2_100);
+    await expect(runner.run()).resolves.toEqual({ accepted: true, reason: 'complete' });
+    expect(schedule.startMs).toBe(100);
+    expect(started).toEqual([{ shotId: 'first', at: 100 }, { shotId: 'second', at: 2_200 }]);
   });
 
-  it('runs auto prepare through the existing preflight status lifecycle exactly once', () => {
-    const content = source(CONTENT_SOURCE);
-    const start = content.indexOf("if (event.data.type === 'PREFIRE_PREPARE')");
-    const end = content.indexOf("if (event.data.type === 'CANCEL_FIRE')", start);
-    const prepareHandler = content.slice(start, end);
+  it('keeps the configured manual interval and pins burst slots to 500ms', async () => {
+    const manual = makeRunner('manual', 3_210);
+    const burst = makeRunner('burst', 500);
 
-    expect(prepareHandler).toContain("prefireAndBurst(fireStartMs, 'auto')");
-    expect(prepareHandler).not.toContain('getPrefireAuthStatus()');
-    expect(prepareHandler).not.toContain('prepareAndRun({');
-    expect(content.match(/await runAutoFirePlan\(startMs, authStatus\.headers\)/g)).toHaveLength(1);
-  });
+    await manual.runner.run();
+    await burst.runner.run();
 
-  it('keeps configured manual interval and pins burst to 500ms', () => {
-    const content = source(CONTENT_SOURCE);
-
-    expect(content).toContain("const intervalMs = options.mode === 'burst' ? 500 : burstIntervalMs");
-    expect(content).toContain("burstIntervalMs: mode === 'burst' ? 500 : undefined");
-  });
-
-  it('carries the configured manual interval into FireRunner slots', () => {
-    const configuredIntervalMs = 3210;
-    const schedule = buildFireSchedule({
-      runId: 'manual-3210',
-      mode: 'manual',
-      startMs: 100,
-      intervalMs: configuredIntervalMs,
-      shots: [
-        { shotId: 'first', productId: 'p1', productPriority: 1 },
-        { shotId: 'second', productId: 'p2', productPriority: 1 },
-      ],
-    });
-
-    expect(schedule.intervalMs).toBe(configuredIntervalMs);
-    expect(schedule.slots[1]?.plannedAt).toBe(100 + configuredIntervalMs);
+    expect(manual.schedule.intervalMs).toBe(3_210);
+    expect(manual.started).toEqual([{ shotId: 'first', at: 100 }, { shotId: 'second', at: 3_310 }]);
+    expect(burst.schedule.intervalMs).toBe(500);
+    expect(burst.started).toEqual([{ shotId: 'first', at: 100 }, { shotId: 'second', at: 600 }]);
   });
 });

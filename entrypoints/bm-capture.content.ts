@@ -5,6 +5,7 @@ import { storage } from '#imports';
 import type { AutoFirePlanShot } from '../lib/api/fire-plan';
 import { FireRunner } from '../lib/api/fire-runner';
 import { buildFireSchedule } from '../lib/api/fire-scheduler';
+import { reportPaymentStatus } from '../lib/api/payment-status-notifier';
 import { buildStrikeQueue, type StrikeShot, type StrikeTarget } from '../lib/api/strike-plan';
 import { calibrate } from '../lib/api/runtime-calibration';
 import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
@@ -1099,7 +1100,11 @@ export default defineContentScript({
                 if (options.pollPayment) {
                   void pollPayCheck(auth, bizId, (status) => {
                     void updatePaymentState({ status: status === 'SUCCESS' ? 'success' : status === 'EXPIRE' ? 'expired' : 'timeout' }).catch(() => undefined);
-                    postToOverlay({ type: status === 'SUCCESS' ? 'STRIKE_PAYMENT_SUCCESS' : status === 'EXPIRE' ? 'STRIKE_PAYMENT_EXPIRED' : 'STRIKE_PAYMENT_TIMEOUT', data: { bizId, orderId: bizId } });
+                    try {
+                      reportPaymentStatus(status, bizId, postToOverlay);
+                    } catch (error) {
+                      try { postToOverlay({ type: 'FIRE_RESULT', line: '> Payment status update failed: ' + String(error) }); } catch {}
+                    }
                   });
                 }
               } catch (error) {
