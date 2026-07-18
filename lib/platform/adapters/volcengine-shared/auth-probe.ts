@@ -47,7 +47,7 @@ export class VolcengineAuthProbe implements IAuthProbe {
       return {
         platform: this.platform,
         capturedAt: Date.now(),
-        headers,
+        headers: { ...headers },
         metadata: {
           source: 'live-page',
           accountId: accountId || undefined,

@@ -102,11 +102,11 @@ describe('getSelectionSummary with priority list', () => {
 });
 
 describe('restoreSelectedProducts', () => {
-  it('defaults to yearly Pro when no saved state exists', () => {
+  it('defaults to the first available priority when no saved state exists', () => {
     S._productMatrix = (S.buildProductMatrix as (list: unknown[]) => Record<string, unknown[]>)(FIXTURE_PRODUCT_LIST);
     S.sessionStorage = { getItem: () => null, setItem: () => {} };
     (S.restoreSelectedProducts as () => void)();
     expect((S._priorityList as unknown[])).toHaveLength(1);
-    expect((S._priorityList as Array<{ productId: string }>)[0].productId).toBe('y-pro');
+    expect((S._priorityList as Array<{ productId: string }>)[0].productId).toBe('m-max');
   });
 });

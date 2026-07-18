@@ -10,6 +10,18 @@ import { xhrRequest } from './request';
 
 const PLAN_ORDER = ['Lite', 'Pro', 'Max'];
 
+interface BigmodelPreview {
+  productId?: string;
+  monthlyPayAmount?: string | number;
+  monthlyOriginalAmount?: string | number;
+  payAmount?: string | number;
+  renewAmount?: string | number;
+  soldOut?: boolean;
+  forbidden?: boolean;
+  canPurchase?: boolean;
+  campaignDiscountDetails?: Array<{ campaignName?: string; rewardDetail?: string }>;
+}
+
 function formatAmount(value: unknown): string {
   const num = Number(value);
   if (!isFinite(num)) return '';
@@ -18,7 +30,7 @@ function formatAmount(value: unknown): string {
     .replace(/(\.\d)0$/, '$1');
 }
 
-function inferBillingFromPreview(item: any): BillingPeriod {
+function inferBillingFromPreview(item: BigmodelPreview | null | undefined): BillingPeriod {
   if (!item) return 'monthly';
   const monthly = Number(item.monthlyPayAmount);
   const total = Number(item.payAmount);
@@ -37,7 +49,7 @@ function inferBillingFromPreview(item: any): BillingPeriod {
   return 'monthly';
 }
 
-function getPromoTag(item: any): string {
+function getPromoTag(item: BigmodelPreview | null | undefined): string {
   const discounts = item?.campaignDiscountDetails;
   if (!discounts || !discounts.length) return '';
   return discounts[0].rewardDetail || discounts[0].campaignName || '';
@@ -53,7 +65,7 @@ export interface BigmodelBatchPreviewResponse {
   code: number;
   msg?: string;
   data?: {
-    productList?: any[];
+    productList?: BigmodelPreview[];
   };
 }
 
@@ -102,8 +114,8 @@ export class BigmodelProductProbe implements IProductProbe {
     return null;
   }
 
-  convert(productList: any[]): ProductCatalog {
-    const groups: Record<BillingPeriod, Product[]> = {
+  convert(productList: BigmodelPreview[]): ProductCatalog {
+    const groups: Record<BillingPeriod, BigmodelPreview[]> = {
       monthly: [],
       quarterly: [],
       yearly: [],
@@ -130,7 +142,7 @@ export class BigmodelProductProbe implements IProductProbe {
         const preview = rows[i];
         const renewAmount = preview.renewAmount != null ? preview.renewAmount : preview.payAmount;
         matrix[billing].push({
-          id: preview.productId,
+          id: preview.productId ?? '',
           name: PLAN_ORDER[i],
           billingPeriod: billing,
           price: Number(preview.monthlyPayAmount) || 0,

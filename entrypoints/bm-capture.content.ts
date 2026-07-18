@@ -19,6 +19,7 @@ import { createAuthStore } from '../lib/platform/shared/stores';
 import { xhrRequest, setMainWorldFetcher, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
+type StorageKey = `${'local' | 'session' | 'sync' | 'managed'}:${string}`;
 const TICKET_TTL_MS = 5 * 60 * 1000; // alpha: 5 minutes per-ticket lifecycle
 
 // ── Runtime namespace (set by bm-early.js at document_start) ──────────────
@@ -168,11 +169,11 @@ function isExtensionContextValid(): boolean {
 }
 
 // ── Safe storage wrapper (module-scope so reminder helpers can use it) ────────
-async function safeGet<T>(key: string): Promise<T | null> {
+async function safeGet<T>(key: StorageKey): Promise<T | null> {
   if (!isExtensionContextValid()) return null;
   try { return await storage.getItem<T>(key); } catch { return null; }
 }
-async function safeSet(key: string, value: any): Promise<void> {
+async function safeSet(key: StorageKey, value: unknown): Promise<void> {
   if (!isExtensionContextValid()) return;
   try { await storage.setItem(key, value); } catch {}
 }
@@ -499,26 +500,28 @@ function createForceStopBanner(options?: {
     });
   }
 
-  if (options?.getTicketCount && fireCountEl && burstCountEl && fireBtn && burstBtn) {
+  const getTicketCount = options?.getTicketCount;
+  if (getTicketCount && fireCountEl && burstCountEl && fireBtn && burstBtn) {
+    const ticketUi = { getTicketCount, fireCountEl, burstCountEl, fireBtn, burstBtn };
     async function updateCount() {
       try {
-        const count = await options.getTicketCount!();
-        fireCountEl.textContent = String(count);
-        burstCountEl.textContent = String(count);
+        const count = await ticketUi.getTicketCount();
+        ticketUi.fireCountEl.textContent = String(count);
+        ticketUi.burstCountEl.textContent = String(count);
         const disabled = count === 0;
-        fireBtn.disabled = disabled;
-        burstBtn.disabled = disabled;
-        [fireBtn, burstBtn].forEach((btn) => {
+        ticketUi.fireBtn.disabled = disabled;
+        ticketUi.burstBtn.disabled = disabled;
+        [ticketUi.fireBtn, ticketUi.burstBtn].forEach((btn) => {
           btn.style.cursor = disabled ? 'not-allowed' : 'pointer';
           btn.style.opacity = disabled ? '0.55' : '1';
           btn.style.animation = disabled ? 'none' : '';
         });
       } catch {
-        fireCountEl.textContent = '0';
-        burstCountEl.textContent = '0';
-        fireBtn.disabled = true;
-        burstBtn.disabled = true;
-        [fireBtn, burstBtn].forEach((btn) => {
+        ticketUi.fireCountEl.textContent = '0';
+        ticketUi.burstCountEl.textContent = '0';
+        ticketUi.fireBtn.disabled = true;
+        ticketUi.burstBtn.disabled = true;
+        [ticketUi.fireBtn, ticketUi.burstBtn].forEach((btn) => {
           btn.style.cursor = 'not-allowed';
           btn.style.opacity = '0.55';
           btn.style.animation = 'none';
@@ -884,7 +887,7 @@ export default defineContentScript({
       const start = Date.now();
       while (Date.now() - start < MAX_MS) {
         try {
-          const res = await xhrRequest<{ code?: number; data?: { status?: string } | string }>({
+          const res = await xhrRequest<{ code?: number; data?: { status?: string | boolean } | string }>({
             method: 'GET',
             url: `https://bigmodel.cn/api/biz/pay/check?bizId=${encodeURIComponent(bizId)}`,
             withCredentials: true,
@@ -896,7 +899,8 @@ export default defineContentScript({
             },
           });
           const data = res.data;
-          const status = data?.data?.status ?? data?.data;
+          const payload = data?.data;
+          const status = typeof payload === 'string' ? payload : payload?.status;
           if (status === 'SUCCESS' || status === 'success' || status === true || data?.code === 200) {
             onUpdate('SUCCESS');
             return;

@@ -24,7 +24,17 @@ import vm from 'vm';
 
 const SRC_DIR = resolve(__dirname, '../../../src/bm-main');
 
-export type BmMainScope = Record<string, unknown>;
+interface StorageStub {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+export interface BmMainScope extends Record<string, unknown> {
+  document: { cookie: string; [key: string]: unknown };
+  window: Record<string, unknown>;
+  sessionStorage: StorageStub;
+  localStorage: StorageStub;
+}
 
 /**
  * Minimal browser-API stubs.
@@ -51,6 +61,18 @@ function makeSandbox(): BmMainScope {
   };
 
   const sandbox: BmMainScope = {
+    // Production loads 00-css before state/product modules. Product-focused
+    // tests intentionally omit that CSS module, so expose only its runtime
+    // globals here rather than evaluating unrelated UI setup.
+    _NS: 'bm-test-',
+    MSG_CMD: 'bm-test-c',
+    MSG_EVT: 'bm-test-e',
+    MSG_OVL: 'bm-test-o',
+    SK_BP: 'bp',
+    SK_PR: 'pr',
+    SK_TK: 'tk',
+    SK_BL: 'bl',
+    SK_PL: 'pl',
     document: doc,
     window: { postMessage: () => {}, addEventListener: () => {}, removeEventListener: () => {} },
     sessionStorage: { getItem: () => null, setItem: () => {} },

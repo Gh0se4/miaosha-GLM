@@ -1,6 +1,8 @@
 import { storage } from '#imports';
 import type { IObservableStore } from '../../types';
 
+type StorageKey = `${'local' | 'session' | 'sync' | 'managed'}:${string}`;
+
 /**
  * Chrome-storage-backed observable store for popup, content scripts and background.
  * Keeps a synchronous in-memory cache so get() is non-blocking.
@@ -11,7 +13,7 @@ export class ChromeStorageStore<T> implements IObservableStore<T> {
   private initialized = false;
   private readonly pendingWatchers = new Set<(value: T | null) => void>();
 
-  constructor(private readonly key: string) {
+  constructor(private readonly key: StorageKey) {
     this.init();
   }
 
