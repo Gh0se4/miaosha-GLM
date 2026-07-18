@@ -252,6 +252,30 @@ describe('FireRunner', () => {
     expect(runner.snapshot().map(({ state }) => state)).toEqual(['returned']);
   });
 
+  it('returns a released ticket when its observer cancels before fetch starts', async () => {
+    const events: string[] = [];
+    const calls: string[] = [];
+    let runner!: FireRunner;
+    const fixture = makeInput({
+      slots: [{ shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 }],
+      onEvent: ({ type }) => {
+        events.push(type);
+        if (type === 'shot_released') runner.cancel();
+      },
+      executeShot: async ({ shotId }) => {
+        calls.push(shotId);
+        return { outcome: 'neterr' };
+      },
+    });
+    runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await runner.run();
+    expect(calls).toEqual([]);
+    expect(events).not.toContain('fetch_started');
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['returned']);
+    expect(events).toContain('run_finished');
+  });
+
   it.each(['cancelled', 'waf'] as const)('%s stops and returns future tickets', async (outcome) => {
     const fixture = makeInput({
       mode: 'burst',

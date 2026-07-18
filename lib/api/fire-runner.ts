@@ -127,6 +127,7 @@ export class FireRunner {
           }
 
           this.release(next);
+          if (this.cancelled) break;
           const fetchStartedAt = this.now();
           lastFetchStartedAt = fetchStartedAt;
           next.fetchStartedAt = fetchStartedAt;
