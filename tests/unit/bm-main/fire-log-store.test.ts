@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import vm from 'vm';
 import { loadBmMainModules } from './_harness';
 
 type FireLogStore = {
@@ -31,13 +34,51 @@ describe('Fire Log V2 store', () => {
     const first = makeStore(dbName);
     await first.writeSession({ sessionId: 's-1', startedAt: '2026-07-19T00:00:00.000Z' });
     await first.writeRun({ runId: 'r-1', sessionId: 's-1', mode: 'manual' });
+    await first.writeEvent({ eventId: 'e-1', sessionId: 's-1', type: 'started' });
     await first.writeShot({ shotId: 'sh-1', sessionId: 's-1', runId: 'r-1' });
 
     const restored = makeStore(dbName);
     expect(await restored.readAll('s-1')).toMatchObject({
       session: { sessionId: 's-1' },
       runs: [{ runId: 'r-1' }],
+      events: [{ eventId: 'e-1' }],
       shots: [{ shotId: 'sh-1' }],
+    });
+  });
+
+  it('recursively preserves database-only fields when fallback records share a key or event sequence', async () => {
+    let failWrites = false;
+    const failingWritesIdb = {
+      open(name: string, version?: number) {
+        const request = idbFactory.open(name, version);
+        request.addEventListener('success', () => {
+          const db = request.result;
+          const transaction = db.transaction.bind(db);
+          db.transaction = ((storeName: string, mode?: IDBTransactionMode) => {
+            if (failWrites && mode === 'readwrite') throw new Error('simulated fallback write');
+            return transaction(storeName, mode);
+          }) as typeof db.transaction;
+        });
+        return request;
+      },
+    };
+    const store = makeStore(dbName, { indexedDB: failingWritesIdb });
+    await store.writeSession({ sessionId: 's-1', dbOnly: { session: true } });
+    await store.writeRun({ runId: 'r-1', sessionId: 's-1', dbOnly: { run: true } });
+    const event = await store.writeEvent({ eventId: 'e-1', sessionId: 's-1', dbOnly: { event: true } });
+    await store.writeShot({ shotId: 'sh-1', sessionId: 's-1', dbOnly: { shot: true }, dbArray: ['db'] });
+
+    failWrites = true;
+    await store.writeSession({ sessionId: 's-1', fallbackOnly: { session: true } });
+    await store.writeRun({ runId: 'r-1', sessionId: 's-1', fallbackOnly: { run: true } });
+    await store.writeEvent({ sequence: event.sequence, eventId: 'e-1', sessionId: 's-1', fallbackOnly: { event: true } });
+    await store.writeShot({ shotId: 'sh-1', sessionId: 's-1', fallbackOnly: { shot: true }, dbArray: ['fallback'] });
+
+    expect(await store.exportLog('s-1')).toMatchObject({
+      session: { dbOnly: { session: true }, fallbackOnly: { session: true } },
+      runs: [{ dbOnly: { run: true }, fallbackOnly: { run: true } }],
+      events: [{ dbOnly: { event: true }, fallbackOnly: { event: true } }],
+      shots: [{ dbOnly: { shot: true }, fallbackOnly: { shot: true }, dbArray: ['db', 'fallback'] }],
     });
   });
 
@@ -106,5 +147,34 @@ describe('Fire Log V2 store', () => {
       runs: [], events: [], shots: [],
     });
     expect(typeof exported.exportedAt).toBe('string');
+  });
+
+  it('surfaces an overlay warning when persistence falls back to memory', async () => {
+    const listeners: Array<(event: MessageEvent) => void> = [];
+    const posted: Array<Record<string, unknown>> = [];
+    const window = {
+      addEventListener: (_type: string, listener: (event: MessageEvent) => void) => listeners.push(listener),
+      postMessage: (message: Record<string, unknown>) => posted.push(message),
+    };
+    const scope = vm.createContext({
+      window, _NS: 'test-', MSG_OVL: '__overlay',
+      document: { visibilityState: 'visible', body: { appendChild: () => {}, removeChild: () => {} }, createElement: () => ({ click: () => {} }) },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 },
+      setTimeout: () => 0, URL: { createObjectURL: () => '', revokeObjectURL: () => {} }, Blob,
+      postToOverlay: (type: string, data: Record<string, unknown>) => window.postMessage({ __overlay: true, type, data }),
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(posted).toContainEqual(expect.objectContaining({
+      __overlay: true,
+      type: 'FIRE_RESULT',
+      data: expect.objectContaining({ line: expect.stringContaining('日志仅临时保存在内存，刷新页面会丢失') }),
+    }));
   });
 });

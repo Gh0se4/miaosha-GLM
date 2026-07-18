@@ -120,10 +120,37 @@ function createFireLogStore(options) {
     }).catch(function(error) { warn(error); return []; });
   }
 
+  function mergeValues(dbValue, fallbackValue) {
+    var key;
+    if (fallbackValue === undefined) return dbValue;
+    if (dbValue === undefined) return fallbackValue;
+    if (Array.isArray(dbValue) && Array.isArray(fallbackValue)) {
+      var mergedArray = dbValue.slice();
+      for (var i = 0; i < fallbackValue.length; i++) {
+        var duplicate = false;
+        for (var j = 0; j < mergedArray.length; j++) {
+          if (JSON.stringify(mergedArray[j]) === JSON.stringify(fallbackValue[i])) { duplicate = true; break; }
+        }
+        if (!duplicate) mergedArray.push(fallbackValue[i]);
+      }
+      return mergedArray;
+    }
+    if (dbValue && fallbackValue && typeof dbValue === 'object' && typeof fallbackValue === 'object') {
+      var mergedObject = {}, dbKey;
+      for (dbKey in dbValue) if (Object.prototype.hasOwnProperty.call(dbValue, dbKey)) mergedObject[dbKey] = dbValue[dbKey];
+      for (key in fallbackValue) if (Object.prototype.hasOwnProperty.call(fallbackValue, key)) mergedObject[key] = mergeValues(mergedObject[key], fallbackValue[key]);
+      return mergedObject;
+    }
+    return fallbackValue;
+  }
+
   function mergeByKey(dbRecords, memoryRecords, key) {
     var result = {}, i;
     for (i = 0; i < dbRecords.length; i++) result[dbRecords[i][key]] = dbRecords[i];
-    for (i = 0; i < memoryRecords.length; i++) result[memoryRecords[i][key]] = memoryRecords[i];
+    for (i = 0; i < memoryRecords.length; i++) {
+      var id = memoryRecords[i][key];
+      result[id] = mergeValues(result[id], memoryRecords[i]);
+    }
     var merged = [];
     for (var id in result) if (Object.prototype.hasOwnProperty.call(result, id)) merged.push(result[id]);
     return merged;

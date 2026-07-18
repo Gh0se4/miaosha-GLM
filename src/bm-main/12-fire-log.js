@@ -13,6 +13,7 @@ var _log_sessionId = '';
 var _log_waveCount = 0;
 var _log_shotSeq = 0;
 var _log_v2Store = null;
+var _log_v2PersistenceWarningShown = false;
 
 (function initFireLog() {
   // Load existing log from sessionStorage
@@ -113,7 +114,9 @@ var _log_v2Store = null;
     if (typeof createFireLogStore === 'function') {
       _log_v2Store = createFireLogStore({
         onPersistenceError: function() {
-          // Task8 can subscribe through the exposed store without breaking V1.
+          if (_log_v2PersistenceWarningShown) return;
+          _log_v2PersistenceWarningShown = true;
+          _log_addLine('⚠ 日志仅临时保存在内存，刷新页面会丢失', '#d97706');
         }
       });
       _log_v2Store.writeSession({
