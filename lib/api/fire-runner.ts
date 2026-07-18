@@ -113,7 +113,7 @@ export class FireRunner {
         const configuredMaxInFlight = Math.max(1, Math.floor(this.input.maxInFlight));
         const maxInFlight = this.input.mode === 'burst'
           ? Math.min(2, configuredMaxInFlight)
-          : configuredMaxInFlight;
+          : 1;
         while (!this.cancelled && inFlight.size < maxInFlight) {
           const next = this.shots.find((shot) => shot.state === 'reserved');
           if (!next) break;
@@ -228,11 +228,19 @@ export class FireRunner {
   }
 
   private stateChanged(): void {
-    this.input.onStateChange?.(this.snapshot());
+    try {
+      this.input.onStateChange?.(this.snapshot());
+    } catch {
+      // Observers must not affect the fire lifecycle.
+    }
   }
 
   private event(type: string, payload: Record<string, unknown>): void {
-    this.input.onEvent({ type, payload });
+    try {
+      this.input.onEvent({ type, payload });
+    } catch {
+      // Observers must not affect the fire lifecycle.
+    }
   }
 
   private defaultWaitUntil(targetMs: number): Promise<void> {
@@ -240,7 +248,7 @@ export class FireRunner {
       this.timer = setTimeout(() => {
         this.timer = undefined;
         resolve();
-      }, Math.max(0, targetMs - Date.now()));
+      }, Math.max(0, targetMs - this.now()));
     });
   }
 }

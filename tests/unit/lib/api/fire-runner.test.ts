@@ -119,6 +119,34 @@ describe('FireRunner', () => {
     expect(startedBeforeSettlement).toBe(2);
   });
 
+  it.each(['manual', 'auto'] as const)('forces %s mode to one in-flight shot', async (mode) => {
+    const pending = [deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>()];
+    const started: string[] = [];
+    const fixture = makeInput({
+      mode,
+      intervalMs: 0,
+      maxInFlight: 2,
+      slots: [
+        { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+        { shotId: 's2', productId: 'p2', productPriority: 1, requestSeq: 1, plannedAt: 0 },
+      ],
+      executeShot: async ({ shotId }) => {
+        started.push(shotId);
+        return pending[Number(shotId.slice(1)) - 1].promise;
+      },
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+    const running = runner.run();
+
+    await flush();
+    const startedBeforeSettlement = [...started];
+    pending[0].resolve({ outcome: 'neterr' });
+    await flush();
+    pending[1].resolve({ outcome: 'neterr' });
+    await running;
+    expect(startedBeforeSettlement).toEqual(['s1']);
+  });
+
   it('anchors manual starts to the previous fetch-started time plus interval', async () => {
     const fixture = makeInput({
       slots: [
@@ -162,8 +190,12 @@ describe('FireRunner', () => {
       const running = runner.run();
 
       await flush();
+      const firstSettled = deferred<void>();
+      fixture.input.onStateChange = (snapshot) => {
+        if (snapshot[0]?.state === 'settled') firstSettled.resolve();
+      };
       pending[0].resolve({ outcome });
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await firstSettled.promise;
       await flush();
       const contender = makeInput({ runId: `contender-${outcome}`, slots: [] });
       const contenderRunner = new FireRunner(contender.input, { now: contender.now, waitUntil: contender.waitUntil });
@@ -232,6 +264,40 @@ describe('FireRunner', () => {
     expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'returned', 'returned']);
   });
 
+  it.each([
+    ['event', { onEvent: () => { throw new Error('observer failed'); } }],
+    ['state', { onStateChange: () => { throw new Error('observer failed'); } }],
+  ] as const)('keeps cleanup and lock release when %s observer throws', async (_kind, callbacks) => {
+    const fixture = makeInput({
+      mode: 'burst',
+      maxInFlight: 1,
+      executeShot: async () => ({ outcome: 'success' }),
+      ...callbacks,
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await expect(runner.run()).resolves.toEqual({ accepted: true, reason: 'success' });
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'returned', 'returned']);
+    const next = makeInput({ runId: `after-${_kind}`, slots: [] });
+    await expect(new FireRunner(next.input).run()).resolves.toEqual({ accepted: true, reason: 'complete' });
+  });
+
+  it('continues when executeShot rejects unexpectedly', async () => {
+    const calls: string[] = [];
+    const fixture = makeInput({
+      executeShot: async ({ shotId }) => {
+        calls.push(shotId);
+        if (shotId === 's1') throw new Error('transport failed');
+        return { outcome: 'neterr' };
+      },
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await runner.run();
+    expect(calls).toEqual(['s1', 's2', 's3']);
+    expect(runner.snapshot().every(({ state }) => state === 'settled')).toBe(true);
+  });
+
   it('clears its pending default timer when cancelled', async () => {
     vi.useFakeTimers();
     try {
@@ -247,6 +313,26 @@ describe('FireRunner', () => {
       runner.cancel();
       await running;
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the injected now clock for default wait duration', async () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      const fixture = makeInput({
+        slots: [{ shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 11_000 }],
+      });
+      const runner = new FireRunner(fixture.input, { now: () => 10_000 });
+      const running = runner.run();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flush();
+      const startedAfterOneSecond = fixture.starts.map(({ shotId }) => shotId);
+      runner.cancel();
+      await running;
+      expect(startedAfterOneSecond).toEqual(['s1']);
     } finally {
       vi.useRealTimers();
     }
