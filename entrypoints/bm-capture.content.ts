@@ -648,7 +648,10 @@ export default defineContentScript({
     // Inject MAIN world script FIRST so it can handle GET_NAMESPACE fallback
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('/bm-main.js');
-    script.dataset.version = chrome.runtime.getManifest().version;
+    const manifest = chrome.runtime && typeof chrome.runtime.getManifest === 'function'
+      ? chrome.runtime.getManifest()
+      : null;
+    if (script.dataset) script.dataset.version = manifest && manifest.version ? manifest.version : '';
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
 

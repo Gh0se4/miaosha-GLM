@@ -349,6 +349,11 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.pollCalls).toBeGreaterThan(0);
   });
 
+  it('loads when chrome.runtime does not expose getManifest', async () => {
+    const harness = createContentHarness();
+    await expect(harness.start()).resolves.toBeUndefined();
+  });
+
   it('cancels an auth-preparing auto run before it reserves tickets or fetches', async () => {
     const capture = deferred<any>();
     const harness = createContentHarness({ capture: capture.promise });

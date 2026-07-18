@@ -234,7 +234,7 @@ describe('Fire Log V2 store', () => {
   it('records visibility changes with wall-clock, monotonic, and state details', async () => {
     const listeners: Record<string, Array<() => void>> = {};
     const document = {
-      visibilityState: 'visible',
+      visibilityState: 'hidden',
       addEventListener: (type: string, listener: () => void) => (listeners[type] ||= []).push(listener),
     };
     const window: Record<string, unknown> = {
@@ -250,7 +250,7 @@ describe('Fire Log V2 store', () => {
     for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
       vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
     }
-    document.visibilityState = 'hidden';
+    document.visibilityState = 'visible';
     listeners.visibilitychange[0]();
     await Promise.resolve();
     await Promise.resolve();
@@ -259,9 +259,13 @@ describe('Fire Log V2 store', () => {
     expect(events).toContainEqual(expect.objectContaining({
       type: 'visibility_changed',
       monotonicMs: 42,
-      details: { visibilityState: 'hidden' },
+      details: { visibilityState: 'visible' },
     }));
     expect(typeof events.find((event) => event.type === 'visibility_changed')!.timestamp).toBe('string');
+    expect((await (window.__fireLogV2Store as FireLogStore).readAll()).session).toMatchObject({
+      initialVisibilityState: 'hidden',
+      visibilityState: 'visible',
+    });
   });
 
   it('records one persistence error without recursively rewriting it', async () => {

@@ -16,6 +16,7 @@ var _log_v2Store = null;
 var _log_v2PersistenceWarningShown = false;
 var _log_v2PersistenceErrorWritten = false;
 var _log_sessionStartedAt = '';
+var _log_initialVisibilityState = '';
 
 (function initFireLog() {
   // Load existing log from sessionStorage
@@ -26,6 +27,7 @@ var _log_sessionStartedAt = '';
       _log_sessionId = saved.sessionId || '';
       _log_shotSeq = saved.shotSeq || 0;
       _log_sessionStartedAt = saved.sessionStartAt || '';
+      _log_initialVisibilityState = saved.initialVisibilityState || '';
     }
   } catch(e) {}
 
@@ -34,12 +36,14 @@ var _log_sessionStartedAt = '';
     _log_sessionId = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
   }
   if (!_log_sessionStartedAt) _log_sessionStartedAt = new Date().toISOString();
+  if (!_log_initialVisibilityState) _log_initialVisibilityState = document.visibilityState || '';
 
   function saveLog() {
     try {
       sessionStorage.setItem(_NS + 'lg', JSON.stringify({
         sessionId: _log_sessionId,
         sessionStartAt: _log_sessionStartedAt,
+        initialVisibilityState: _log_initialVisibilityState,
         updatedAt: new Date().toISOString(),
         entries: _log_entries,
         shotSeq: _log_shotSeq,
@@ -110,6 +114,7 @@ var _log_sessionStartedAt = '';
       userAgent: navigator.userAgent,
       pageUrl: location.href,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      initialVisibilityState: _log_initialVisibilityState,
       visibilityState: document.visibilityState || '',
       sessionStartAt: _log_sessionStartedAt,
       lastUpdatedAt: new Date().toISOString()
