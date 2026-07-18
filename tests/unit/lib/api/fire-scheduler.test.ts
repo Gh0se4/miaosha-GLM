@@ -48,6 +48,46 @@ describe('buildFireSchedule', () => {
     expect(plan.slots[1].plannedAt).toBe(1001);
   });
 
+  it('normalizes non-positive timing values and preserves slot metadata', () => {
+    const plan = buildFireSchedule({
+      runId: 'run-normalized',
+      mode: 'burst',
+      startMs: -12.6,
+      intervalMs: 0,
+      shots: [
+        { shotId: 's-first', productId: 'p-first', productPriority: 30 },
+        { shotId: 's-second', productId: 'p-second', productPriority: 10 },
+        { shotId: 's-third', productId: 'p-third', productPriority: 20 },
+      ],
+    });
+
+    expect(plan.startMs).toBe(0);
+    expect(plan.intervalMs).toBe(1);
+    expect(plan.slots).toEqual([
+      {
+        shotId: 's-first',
+        productId: 'p-first',
+        productPriority: 30,
+        requestSeq: 0,
+        plannedAt: 0,
+      },
+      {
+        shotId: 's-second',
+        productId: 'p-second',
+        productPriority: 10,
+        requestSeq: 1,
+        plannedAt: 1,
+      },
+      {
+        shotId: 's-third',
+        productId: 'p-third',
+        productPriority: 20,
+        requestSeq: 2,
+        plannedAt: 2,
+      },
+    ]);
+  });
+
   it('is reproducible across repeated calls', () => {
     const args = {
       runId: 'run-4',
