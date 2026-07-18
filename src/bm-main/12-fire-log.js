@@ -209,6 +209,9 @@ var _log_initialVisibilityState = '';
           });
         }
       }
+      if (_log_v2Store && eventData.shot && eventData.shot.shotId) {
+        _log_v2Store.writeShot(Object.assign({ sessionId: _log_sessionId, runId: eventData.runId }, eventData.shot));
+      }
       return;
     }
 

@@ -259,6 +259,45 @@ describe('Fire Log V2 store', () => {
     });
   });
 
+  it('persists an aborted started shot from its V2 event without marking it unsent', async () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'aborted-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      document: { visibilityState: 'visible', addEventListener: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 }, setTimeout: () => 0, postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    for (const listener of listeners) listener({ data: { __overlay: true, type: 'FIRE_LOG_V2_EVENT', data: {
+      type: 'fetch_aborted', runId: 'run-cancelled', shotId: 'shot-1', requestSeq: 0, plannedAt: 1000,
+      timing: { bridgeReceivedAt: 1001, fetchCalledAt: 1002 },
+      shot: {
+        shotId: 'shot-1', runId: 'run-cancelled', requestSeq: 0, plannedAt: 1000, outcome: 'cancelled',
+        timing: { bridgeReceivedAt: 1001, fetchCalledAt: 1002 },
+        request: { method: 'POST', headers: { Authorization: 'secret', 'X-Trace': 'keep' }, body: '{"ticket":"full"}' },
+        response: { headers: { 'X-Response': 'keep' }, body: '{"partial":true}', status: 499, statusText: 'Client Closed Request' },
+        cancel: { reason: 'user_cancelled_after_fetch_started' },
+      },
+    } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const report = await (window.__fireLogV2Store as FireLogStore).exportLog('');
+    expect((report.events as Array<Record<string, unknown>>)).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'fetch_aborted', runId: 'run-cancelled' })]));
+    expect((report.shots as Array<Record<string, unknown>>)[0]).toMatchObject({
+      runId: 'run-cancelled', shotId: 'shot-1', outcome: 'cancelled', plannedAt: 1000,
+      timing: { fetchCalledAt: 1002 }, response: { body: '{"partial":true}', status: 499 },
+      request: { headers: { 'X-Trace': 'keep' } }, cancel: { reason: 'user_cancelled_after_fetch_started' },
+    });
+    expect((report.shots as Array<Record<string, unknown>>)[0]).not.toHaveProperty('terminalUnsentReason');
+  });
+
   it('writes a complete session snapshot using the runtime manifest version', async () => {
     const listeners: Record<string, Array<() => void>> = {};
     const window: Record<string, unknown> = {

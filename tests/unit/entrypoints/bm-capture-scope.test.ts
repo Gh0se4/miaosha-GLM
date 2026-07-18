@@ -108,6 +108,7 @@ function createContentHarness(options: {
           this.input.onEvent({ type: 'tickets_reserved', payload: {} });
           runnerEvents.push('tickets_reserved');
           const slot = this.input.slots[0];
+          this.input.onEvent({ type: 'shot_released', payload: { runId: this.input.runId, shotId: slot.shotId, requestSeq: slot.requestSeq, plannedAt: slot.plannedAt, scheduledAt: 123, releasedAt: 123 } });
           const result = await this.input.executeShot({
             shotId: slot.shotId,
             requestSeq: slot.requestSeq,
@@ -121,7 +122,7 @@ function createContentHarness(options: {
       },
     };
     if (id.includes('fire-scheduler')) return {
-      buildFireSchedule: (input: any) => ({ ...input, slots: input.shots.map((shot: any, index: number) => ({ ...shot, requestSeq: index })) }),
+      buildFireSchedule: (input: any) => ({ ...input, slots: input.shots.map((shot: any, index: number) => ({ ...shot, requestSeq: index, plannedAt: input.startMs + index * input.intervalMs })) }),
     };
     if (id.includes('strike-plan')) return {
       buildStrikeQueue: ({ tickets, targets }: any) => ({ shots: [{ ...tickets[0], productId: targets[0].productId, priority: targets[0].priority }] }),
@@ -137,7 +138,13 @@ function createContentHarness(options: {
     if (id.includes('platform')) return {
       bigmodelAdapter: {
         authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
-        orderPipeline: { run: async () => options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }) },
+        orderPipeline: { run: async (_ctx: any, _auth: any, fireRequest: any) => {
+          fireRequest?.onFetchStarted?.({
+            requestId: fireRequest.requestId,
+            timing: { bridgeReceivedAt: 1, bridgeReceivedPerfMs: 1, fetchCalledAt: 2, fetchCalledPerfMs: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
+          });
+          return await (options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }));
+        } },
       },
     };
     if (id.includes('runtime-calibration')) return { calibrate: async () => { calibrationCalls++; return {}; } };
@@ -437,5 +444,37 @@ describe('bm-capture.content.ts scope regression', () => {
       outcome: classified.outcome,
       responsibility,
     });
+  });
+
+  it('persists a cancelled result after the MAIN fetch has already started', async () => {
+    const pending = deferred<any>();
+    const harness = createContentHarness({ orderResult: pending.promise });
+    await harness.start();
+
+    const firing = harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await harness.command('CANCEL_FIRE');
+    pending.resolve({
+      success: false,
+      metadata: {
+        transport: {
+          status: 499,
+          statusText: 'Client Closed Request',
+          headers: { 'x-trace': 'trace-1' },
+          body: '{"cancelled":true}',
+          timing: { bridgeReceivedAt: 1, fetchCalledAt: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
+          request: { method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview', headers: { Authorization: 'secret' }, body: '{"ticket":"ticket-1"}' },
+        },
+      },
+    });
+    await firing;
+
+    expect(harness.posted).toContainEqual(expect.objectContaining({
+      type: 'FIRE_LOG_V2_EVENT',
+      data: expect.objectContaining({
+        type: 'fetch_aborted', runId: expect.any(String), shotId: 'shot-0',
+        shot: expect.objectContaining({ outcome: 'cancelled', shotId: 'shot-0', releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
+      }),
+    }));
   });
 });

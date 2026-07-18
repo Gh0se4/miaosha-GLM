@@ -1075,6 +1075,7 @@ export default defineContentScript({
       };
 
       const total = plan.shots.length;
+      const releasedAtByShot = new Map<string, number>();
       const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
         const transport = result?.metadata?.transport || {};
         const request = transport.request;
@@ -1085,6 +1086,7 @@ export default defineContentScript({
           runId, shotId: `shot-${idx}`, shotIdx: idx, productId: shot.productId, priority: shot.priority,
           ticket: shot.ticket, randstr: shot.randstr, ticketMask: maskTicket(shot.ticket),
           requestSeq: idx, plannedAt: startMs + idx * intervalMs, outcome, rtt, sentAt,
+          releasedAt: releasedAtByShot.get(`shot-${idx}`),
           request, response, timing: transport.timing,
           httpStatus: transport.status, statusText: transport.statusText,
           ...extra,
@@ -1095,6 +1097,29 @@ export default defineContentScript({
         if (cancelled) return 'cancelled';
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
+        let fetchTiming: MainWorldTransportTiming | undefined;
+        const persistCancelledStartedShot = (result?: any) => {
+          if (!fetchTiming) return;
+          const cancelledShot = buildShotLog(shot, idx, 'cancelled', Date.now() - t1, t1, result, {
+            code: result?.metadata?.transport?.status || 0,
+            request: result?.metadata?.transport?.request || {
+              method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview',
+              headers: {
+                Authorization: normalizeAuthHeaders(auth)?.authorization || '',
+                'Bigmodel-Organization': normalizeAuthHeaders(auth)?.bigmodelOrganization || '',
+                'Bigmodel-Project': normalizeAuthHeaders(auth)?.bigmodelProject || '',
+              },
+              body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr || '' }),
+            },
+            timing: result?.metadata?.transport?.timing || fetchTiming,
+            cancel: { reason: 'user_cancelled_after_fetch_started', cancelledAt: Date.now() },
+          });
+          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
+            type: 'fetch_aborted', runId, shotId: `shot-${idx}`, requestSeq: idx,
+            plannedAt: cancelledShot.plannedAt, timing: cancelledShot.timing,
+            shot: cancelledShot,
+          } });
+        };
         try {
           const result = await (bigmodelAdapter.orderPipeline as any).run({
             platform: 'bigmodel',
@@ -1104,10 +1129,16 @@ export default defineContentScript({
             requestId: fireRequest.requestId,
             runId,
             shotId: `shot-${idx}`,
-            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId }),
+            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => {
+              fetchTiming = timing;
+              fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId });
+            },
             onAbortReady: fireRequest.setAbort,
           });
-          if (cancelled) return 'cancelled';
+          if (cancelled) {
+            persistCancelledStartedShot(result);
+            return 'cancelled';
+          }
           const rtt = Date.now() - t1;
 
           if (result.success) {
@@ -1178,7 +1209,10 @@ export default defineContentScript({
             return cls.outcome;
           }
         } catch (e: any) {
-          if (e?.name === 'AbortError' || cancelled) return 'cancelled';
+          if (e?.name === 'AbortError' || cancelled) {
+            persistCancelledStartedShot();
+            return 'cancelled';
+          }
           const cls = classifyPreviewNetworkError(e);
           postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + cls.rawServerMsg });
           postToOverlay({
@@ -1205,6 +1239,10 @@ export default defineContentScript({
         ...schedule,
         maxInFlight,
         onEvent: (event) => {
+          if (event.type === 'shot_released' && typeof event.payload.shotId === 'string') {
+            const releasedAt = Number(event.payload.releasedAt ?? event.payload.scheduledAt);
+            if (Number.isFinite(releasedAt)) releasedAtByShot.set(event.payload.shotId, releasedAt);
+          }
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: event.type, ...event.payload } });
           if (event.type === 'tickets_reserved') {
             const reservedKeys = new Set(plan.shots.map((shot) => shot.ticket + ':' + shot.randstr + ':' + shot.createdAt));

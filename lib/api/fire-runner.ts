@@ -15,6 +15,7 @@ export interface FireShotState {
   fetchStartedAt?: number;
   plannedAt: number;
   scheduledAt?: number;
+  releasedAt?: number;
 }
 
 export interface FireRunInput {
@@ -227,6 +228,7 @@ export class FireRunner {
 
   private release(shot: FireShotState): void {
     shot.scheduledAt = this.now();
+    shot.releasedAt = shot.scheduledAt;
     this.transition(shot, 'released');
     this.event('shot_released', {
       runId: this.input.runId,
@@ -234,6 +236,7 @@ export class FireRunner {
       requestSeq: shot.requestSeq,
       plannedAt: shot.plannedAt,
       scheduledAt: shot.scheduledAt,
+      releasedAt: shot.releasedAt,
     });
   }
 
