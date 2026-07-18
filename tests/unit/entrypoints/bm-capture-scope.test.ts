@@ -17,6 +17,7 @@ function createContentHarness(options: {
   paymentStateFails?: boolean;
   orderResult?: any;
   nextSaleTime?: number;
+  runtimeCalibration?: any;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -43,6 +44,7 @@ function createContentHarness(options: {
       if (key === 'local:selectedProducts') {
         return { priorityList: [{ productId: 'product-1' }] };
       }
+      if (key === 'local:runtimeCalibration') return options.runtimeCalibration ?? null;
       return null;
     },
     setItem: async () => undefined,
@@ -386,6 +388,31 @@ describe('bm-capture.content.ts scope regression', () => {
       now + 5 * 60 * 1000,
       now + 4 * 60 * 1000,
     ]);
+  });
+
+  it('keeps legacy cached RTT compensation available while calibration is quiet', async () => {
+    const harness = createContentHarness({
+      nextSaleTime: Date.now() + 4 * 60 * 1000,
+      runtimeCalibration: {
+        latencyMs: 321,
+        clockOffsetMs: -17,
+        sampleCount: 6,
+        calibratedAt: 123,
+        reason: 'legacy-cache',
+      },
+    });
+
+    await harness.start();
+    await harness.command('GET_RUNTIME_CALIBRATION');
+
+    expect(harness.calibrationCalls).toBe(0);
+    expect(harness.posted.find((message) => message.type === 'RUNTIME_CALIBRATION')?.data).toMatchObject({
+      rttCompensationMs: 321,
+      latencyMs: 321,
+      clockOffsetMs: -17,
+      sampleCount: 6,
+      reason: 'legacy-cache',
+    });
   });
 
   it.each([

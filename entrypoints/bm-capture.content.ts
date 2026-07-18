@@ -90,6 +90,8 @@ let bannerDismissTimer: number | null = null;
 
 interface RuntimeCalibrationSnapshot {
   rttCompensationMs: number;
+  /** Compatibility with snapshots persisted before RTT compensation was renamed. */
+  latencyMs?: number;
   clockOffsetMs: number;
   sampleCount: number;
   calibratedAt: number;
@@ -709,8 +711,11 @@ export default defineContentScript({
     async function pushRuntimeCalibrationToOverlay() {
       const cached = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY);
       if (!cached) return false;
-      if (!Number.isFinite(cached.rttCompensationMs) || !Number.isFinite(cached.clockOffsetMs)) return false;
-      postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { ...cached, latencyMs: cached.rttCompensationMs } });
+      const rttCompensationMs = Number.isFinite(cached.rttCompensationMs)
+        ? cached.rttCompensationMs
+        : cached.latencyMs;
+      if (!Number.isFinite(rttCompensationMs) || !Number.isFinite(cached.clockOffsetMs)) return false;
+      postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { ...cached, rttCompensationMs, latencyMs: rttCompensationMs } });
       return true;
     }
 
@@ -753,7 +758,9 @@ export default defineContentScript({
           shouldContinue: shouldContinueRuntimeCalibration,
           onEvent: (event) => {
             if (event.type === 'calibration_quiet_window_entered') {
-              void recordQuietWindowEntry(reason);
+              void recordQuietWindowEntry(reason).catch((error) => {
+                console.warn('Failed to record calibration quiet-window entry', error);
+              });
               return;
             }
             postToOverlay({ type: event.type, data: { reason, ...(event.details || {}) } });
