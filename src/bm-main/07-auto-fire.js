@@ -1,3 +1,5 @@
+var EARLY_MS = 10;
+
 function scheduleAutoFire(nextSaleTime) {
   if (_rt.autoTimer) clearTimeout(_rt.autoTimer);
   if (_rt.countdownTimer) clearInterval(_rt.countdownTimer);
@@ -7,7 +9,7 @@ function scheduleAutoFire(nextSaleTime) {
   var PREPARATION_LEAD_MS = 3000;
   // targetMs is server-aligned. Convert the compensated first-fetch target to
   // local epoch once, then schedule preparation separately from the first slot.
-  var fireStartMs = nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs;
+  var fireStartMs = nextSaleTime - _rt.latencyMs - EARLY_MS - _rt.clockOffsetMs;
   var prepareAtMs = fireStartMs - PREPARATION_LEAD_MS;
   var delay = prepareAtMs - Date.now();
 
@@ -54,12 +56,12 @@ function dispatchAutoFire() {
   window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_PREPARE', data: {
     targetMs: _rt.nextSaleTime,
     preparationLeadMs: 3000,
-    prepareAtMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs - 3000,
-    fireStartMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs,
-    startMs: _rt.nextSaleTime - _rt.latencyMs - _rt.clockOffsetMs,
+    prepareAtMs: _rt.nextSaleTime - _rt.latencyMs - EARLY_MS - _rt.clockOffsetMs - 3000,
+    fireStartMs: _rt.nextSaleTime - _rt.latencyMs - EARLY_MS - _rt.clockOffsetMs,
+    startMs: _rt.nextSaleTime - _rt.latencyMs - EARLY_MS - _rt.clockOffsetMs,
     rttCompensationMs: _rt.latencyMs,
     clockOffsetMs: _rt.clockOffsetMs,
-    earlyOffsetMs: 0,
+    earlyOffsetMs: EARLY_MS,
     reason: 'auto'
   } }, '*');
 }
