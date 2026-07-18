@@ -12,6 +12,7 @@ var _log_entries = [];
 var _log_sessionId = '';
 var _log_waveCount = 0;
 var _log_shotSeq = 0;
+var _log_v2Store = null;
 
 (function initFireLog() {
   // Load existing log from sessionStorage
@@ -41,7 +42,7 @@ var _log_shotSeq = 0;
     } catch(e) {}
   }
 
-  function downloadLog() {
+  function legacyDownloadLog() {
     var report = {
       exportedAt: new Date().toISOString(),
       sessionId: _log_sessionId,
@@ -73,6 +74,61 @@ var _log_shotSeq = 0;
     }, 100);
   }
 
+  function downloadV2Log() {
+    if (!_log_v2Store) { legacyDownloadLog(); return Promise.resolve(null); }
+    return _log_v2Store.exportLog(_log_sessionId).then(function(report) {
+      var blob = new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'qianggou-fire-log-v2-' + _log_sessionId + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+      return report;
+    }).catch(function() {
+      // Export must stay usable even when persistence is unavailable.
+      legacyDownloadLog();
+      return null;
+    });
+  }
+
+  function writeV2Event(type, data) {
+    if (!_log_v2Store) return;
+    _log_v2Store.writeEvent({
+      eventId: 'main-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      sessionId: _log_sessionId,
+      runId: data && data.runId,
+      timestamp: new Date().toISOString(),
+      monotonicMs: performance && performance.now ? performance.now() : 0,
+      type: type,
+      details: data || {}
+    });
+  }
+
+  try {
+    if (typeof createFireLogStore === 'function') {
+      _log_v2Store = createFireLogStore({
+        onPersistenceError: function() {
+          // Task8 can subscribe through the exposed store without breaking V1.
+        }
+      });
+      _log_v2Store.writeSession({
+        sessionId: _log_sessionId,
+        extensionVersion: _fireLogV2ManifestVersion(),
+        userAgent: navigator.userAgent,
+        pageUrl: location.href,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        startedAt: new Date().toISOString(),
+        visibilityState: document.visibilityState || ''
+      });
+      window.__fireLogV2Store = _log_v2Store;
+    }
+  } catch (e) { _log_v2Store = null; }
+
   function clearLog() {
     _log_entries = [];
     _log_shotSeq = 0;
@@ -97,6 +153,7 @@ var _log_shotSeq = 0;
   window.addEventListener('message', function(e) {
     if (!e.data || !e.data[MSG_OVL]) return;
     var d = e.data;
+    writeV2Event(d.type, d.data || { line: d.line || '' });
 
     if (d.type === 'FIRE_BATCH_START' && d.data) {
       _log_waveCount++;
@@ -108,6 +165,14 @@ var _log_shotSeq = 0;
         startMs: d.data.startMs || Date.now()
       };
       _log_addLine('  CONFIG ' + JSON.stringify(cfg), '#94a3b8');
+      if (_log_v2Store) _log_v2Store.writeRun({
+        runId: d.data.runId || ('wave-' + _log_waveCount + '-' + Date.now()),
+        sessionId: _log_sessionId,
+        mode: cfg.mode,
+        startMs: cfg.startMs,
+        intervalMs: cfg.burstIntervalMs,
+        totalShots: cfg.totalShots
+      });
     }
 
     if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
@@ -135,6 +200,23 @@ var _log_shotSeq = 0;
       };
       _log_entries.push(entry);
       saveLog();
+      if (_log_v2Store) _log_v2Store.writeShot({
+        shotId: shot.shotId || ('legacy-' + _log_waveCount + '-' + _log_shotSeq),
+        sessionId: _log_sessionId,
+        runId: shot.runId,
+        localSequence: _log_shotSeq,
+        productId: shot.productId,
+        priority: shot.priority,
+        ticket: shot.ticket,
+        randstr: shot.randstr,
+        request: shot.request,
+        response: shot.response,
+        outcome: entry.outcome,
+        httpStatus: entry.httpStatus,
+        rttMs: entry.rttMs,
+        responseBody: entry.rawBody,
+        rawServerMessage: entry.rawServerMsg
+      });
 
       // Build log line
       var tag = '>[#' + entry.shotIdx + '/' + (entry.wave) + '][P' + entry.priority + ']';
@@ -179,7 +261,7 @@ var _log_shotSeq = 0;
   });
 
   // Expose download/clear globally for the Fire Matrix buttons
-  window.__fireLogDownload = downloadLog;
+  window.__fireLogDownload = downloadV2Log;
   window.__fireLogClear = clearLog;
   window.__fireLogEntries = function() { return _log_entries; };
   window.__fireLogSummary = function() {

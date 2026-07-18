@@ -520,7 +520,7 @@ function _fv_bindEvents() {
   if (dwn) dwn.addEventListener('click', _fv_downloadLog);
 
   var json = document.getElementById(_NS + 'fv_json');
-  if (json) { json.addEventListener("click", function() { if (window.__fireLogDownload) { window.__fireLogDownload(); return; } _fv_downloadJson(); }); }
+  if (json) { json.addEventListener('click', _fv_downloadJson); }
 
   var asc = document.getElementById(_NS + 'fv_asc');
   if (asc) asc.addEventListener('click', function() {
