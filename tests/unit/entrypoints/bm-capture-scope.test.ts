@@ -144,4 +144,19 @@ describe('bm-capture.content.ts scope regression', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('registers auto-fire cancellation before awaiting auth preflight', () => {
+    const source = fs.readFileSync(SOURCE_PATH, 'utf-8');
+    const prepareStart = source.indexOf("if (event.data.type === 'PREFIRE_PREPARE')");
+    const prepareEnd = source.indexOf("if (event.data.type === 'CANCEL_FIRE')", prepareStart);
+    const prepareBlock = source.slice(prepareStart, prepareEnd);
+
+    expect(prepareStart).toBeGreaterThanOrEqual(0);
+    expect(prepareBlock.indexOf('createFirePreparationCancellation()')).toBeGreaterThanOrEqual(0);
+    expect(prepareBlock.indexOf('currentFirePreparationCancellation = preparationCancellation'))
+      .toBeGreaterThan(prepareBlock.indexOf('createFirePreparationCancellation()'));
+    expect(prepareBlock.indexOf('await prefireAndBurst')).toBeGreaterThan(
+      prepareBlock.indexOf('currentFirePreparationCancellation = preparationCancellation'),
+    );
+  });
 });

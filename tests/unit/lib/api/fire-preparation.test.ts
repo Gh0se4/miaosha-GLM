@@ -9,8 +9,8 @@ function deferred<T>() {
 }
 
 describe('fire preparation cancellation', () => {
-  it('does not create a runner or reserve tickets when cancelled during deferred preflight, and a later run proceeds', async () => {
-    const preflight = deferred<{ ticket: string }>();
+  it('does not create a runner, reserve tickets, or fetch when cancellation wins deferred auth preflight, and a later run proceeds', async () => {
+    const authStatus = deferred<{ ok: true; ticket: string }>();
     const firstCancellation = createFirePreparationCancellation();
     let runners = 0;
     let fetches = 0;
@@ -18,7 +18,7 @@ describe('fire preparation cancellation', () => {
 
     const firstRun = runAfterFirePreparation({
       cancellation: firstCancellation,
-      preflight: () => preflight.promise,
+      preflight: () => authStatus.promise,
       onReady: async () => {
         runners += 1;
         ticketsReserved += 1;
@@ -27,7 +27,7 @@ describe('fire preparation cancellation', () => {
     });
 
     firstCancellation.cancel();
-    preflight.resolve({ ticket: 'ticket-1' });
+    authStatus.resolve({ ok: true, ticket: 'ticket-1' });
 
     await expect(firstRun).resolves.toBe('cancelled');
     expect({ runners, fetches, ticketsReserved }).toEqual({ runners: 0, fetches: 0, ticketsReserved: 0 });
@@ -35,7 +35,7 @@ describe('fire preparation cancellation', () => {
     const secondCancellation = createFirePreparationCancellation();
     await expect(runAfterFirePreparation({
       cancellation: secondCancellation,
-      preflight: async () => ({ ticket: 'ticket-2' }),
+      preflight: async () => ({ ok: true, ticket: 'ticket-2' }),
       onReady: async () => { runners += 1; },
     })).resolves.toBe('ready');
     expect(runners).toBe(1);

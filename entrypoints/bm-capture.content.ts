@@ -969,13 +969,19 @@ export default defineContentScript({
     }
 
     // ── Alpha Auto-Fire execution ────────────────────────────────────────────
-    async function runAutoFirePlan(fireStartMs: number, authArg: any) {
+    async function runAutoFirePlan(
+      fireStartMs: number,
+      authArg: any,
+      preparationCancellation?: FirePreparationCancellation,
+    ) {
       // Auto mode uses the same explicit runner lifecycle as manual mode.
+      if (preparationCancellation?.cancelled) return;
       await prepareAndRun({
         runId: `auto-${fireStartMs}-${Date.now()}`,
         mode: 'auto',
         startMs: fireStartMs,
         authArg,
+        preparationCancellation,
       });
     }
 
@@ -993,6 +999,7 @@ export default defineContentScript({
       burstIntervalMs?: number;
       enableBusyBackoff: boolean;
       pollPayment: boolean;
+      preparationCancellation?: FirePreparationCancellation;
     }
 
     async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
@@ -1001,7 +1008,7 @@ export default defineContentScript({
         return;
       }
       preparingFireRun = true;
-      const preparationCancellation = createFirePreparationCancellation();
+      const preparationCancellation = options.preparationCancellation ?? createFirePreparationCancellation();
       currentFirePreparationCancellation = preparationCancellation;
       const finishPreparationCancellation = () => {
         if (currentFirePreparationCancellation === preparationCancellation) {
@@ -1023,12 +1030,15 @@ export default defineContentScript({
         return;
       }
 
-      let launchSnapshot: Awaited<ReturnType<typeof getLaunchSnapshot>>;
+      const preparedLaunch = {
+        snapshot: null as Awaited<ReturnType<typeof getLaunchSnapshot>> | null,
+      };
       const preparationResult = await runAfterFirePreparation({
         cancellation: preparationCancellation,
         preflight: () => getLaunchSnapshot(preparationCancellation),
-        onReady: (snapshot) => { launchSnapshot = snapshot; },
+        onReady: (snapshot) => { preparedLaunch.snapshot = snapshot; },
       });
+      const launchSnapshot = preparedLaunch.snapshot;
       if (preparationResult === 'cancelled' || !launchSnapshot || preparationCancellation.cancelled) {
         reportPreparationCancelled();
         return;
@@ -1277,6 +1287,7 @@ export default defineContentScript({
       mode: 'manual' | 'burst' | 'auto';
       startMs: number;
       authArg?: any;
+      preparationCancellation?: FirePreparationCancellation;
     }) {
       const mode = input.mode;
       const label = mode === 'burst' ? 'BURST' : mode === 'auto' ? 'Auto' : 'Strike';
@@ -1287,6 +1298,7 @@ export default defineContentScript({
         burstIntervalMs: mode === 'burst' ? 500 : undefined,
         enableBusyBackoff: mode === 'manual',
         pollPayment: true,
+        preparationCancellation: input.preparationCancellation,
       });
     }
 
@@ -1308,8 +1320,25 @@ export default defineContentScript({
       await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', startMs, authArg: auth });
     }
 
-    async function prefireAndBurst(startMs: number, reason: string) {
+    async function prefireAndBurst(
+      startMs: number,
+      reason: string,
+      preparationCancellation?: FirePreparationCancellation,
+    ) {
+      const reportPrefireCancelled = () => {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
+      };
+      const finishPrefireCancellation = () => {
+        if (currentFirePreparationCancellation === preparationCancellation) {
+          currentFirePreparationCancellation = null;
+        }
+      };
+      try {
       const authStatus = await getPrefireAuthStatus();
+      if (preparationCancellation?.cancelled) {
+        reportPrefireCancelled();
+        return;
+      }
       if (!authStatus.ok) {
         postToOverlay({
           type: 'PREFIRE_STATUS',
@@ -1340,8 +1369,13 @@ export default defineContentScript({
       bannerWaveCount++;
       updateBannerWaveBadge();
 
+      if (preparationCancellation?.cancelled) {
+        reportPrefireCancelled();
+        return;
+      }
+
       if (reason === 'auto') {
-        await runAutoFirePlan(startMs, authStatus.headers);
+        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation);
         return;
       }
 
@@ -1351,6 +1385,9 @@ export default defineContentScript({
       }
 
       await strike(startMs, authStatus.headers);
+      } finally {
+        finishPrefireCancellation();
+      }
     }
 
     // ── Listen for messages from MAIN world script ──
@@ -1370,12 +1407,16 @@ export default defineContentScript({
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
           const fireStartMs: number = event.data.data?.fireStartMs ?? event.data.data?.startMs ?? Date.now();
-          await prefireAndBurst(fireStartMs, 'auto');
+          if (currentFirePreparationCancellation || preparingFireRun || currentFireRunner) {
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
+            return;
+          }
+          const preparationCancellation = createFirePreparationCancellation();
+          currentFirePreparationCancellation = preparationCancellation;
+          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation);
         }
         if (event.data.type === 'CANCEL_FIRE') {
-          if (preparingFireRun && !currentFireRunner) {
-            currentFirePreparationCancellation?.cancel();
-          }
+          currentFirePreparationCancellation?.cancel();
           currentFireRunner?.cancel();
           currentStrikeCancel?.();
         }
