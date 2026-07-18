@@ -13,9 +13,20 @@ interface ProbeResult {
 }
 
 export interface CalibrationResult {
-  latencyMs: number;      // median RTT
+  rttCompensationMs: number; // median RTT retained for scheduler compensation
   clockOffsetMs: number;  // serverTime - localTime
   probes: ProbeResult[];
+}
+
+export interface CalibrationEvent {
+  type: 'calibration_probe_started' | 'calibration_probe_finished' | 'calibration_quiet_window_entered';
+  details?: Record<string, unknown>;
+}
+
+export interface CalibrationOptions {
+  /** Checked before every probe so callers can enforce the T-5 quiet window. */
+  shouldContinue?: () => boolean | Promise<boolean>;
+  onEvent?: (event: CalibrationEvent) => void;
 }
 
 async function probeOnce(auth: {
@@ -67,15 +78,36 @@ export async function calibrate(
     bigmodelProject: string;
   },
   onProgress?: (done: number, total: number) => void,
+  options: CalibrationOptions = {},
 ): Promise<CalibrationResult> {
   const probes: ProbeResult[] = [];
 
   for (let i = 0; i < PROBE_COUNT; i++) {
+    const shouldContinue = await options.shouldContinue?.();
+    if (shouldContinue === false) {
+      options.onEvent?.({
+        type: 'calibration_quiet_window_entered',
+        details: { probeIndex: i, total: PROBE_COUNT },
+      });
+      break;
+    }
+
+    let success = false;
+    options.onEvent?.({
+      type: 'calibration_probe_started',
+      details: { probeIndex: i, total: PROBE_COUNT },
+    });
     try {
       const result = await probeOnce(auth);
       probes.push(result);
+      success = true;
     } catch {
       // Skip failed probes
+    } finally {
+      options.onEvent?.({
+        type: 'calibration_probe_finished',
+        details: { probeIndex: i, total: PROBE_COUNT, success },
+      });
     }
     onProgress?.(i + 1, PROBE_COUNT);
     if (i < PROBE_COUNT - 1) {
@@ -84,7 +116,7 @@ export async function calibrate(
   }
 
   if (probes.length === 0) {
-    return { latencyMs: 0, clockOffsetMs: 0, probes: [] };
+    return { rttCompensationMs: 0, clockOffsetMs: 0, probes: [] };
   }
 
   // Take best 60% by lowest RTT (NTP-style filtering)
@@ -92,7 +124,7 @@ export async function calibrate(
   const keep = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * BEST_RATIO)));
 
   const latencies = keep.map(p => p.rttMs);
-  const latencyMs = Math.round(median(latencies));
+  const rttCompensationMs = Math.round(median(latencies));
 
   // Clock offset: serverTime - localTime, estimated at mid-RTT
   const offsets = keep
@@ -107,5 +139,5 @@ export async function calibrate(
     ? Math.round(median(offsets))
     : 0;
 
-  return { latencyMs, clockOffsetMs, probes: keep };
+  return { rttCompensationMs, clockOffsetMs, probes: keep };
 }

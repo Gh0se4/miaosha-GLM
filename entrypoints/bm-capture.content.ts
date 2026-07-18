@@ -89,7 +89,7 @@ const BANNER_AUTO_DISMISS_MS = 3 * 60 * 1000; // R3 flash banner auto-dismiss af
 let bannerDismissTimer: number | null = null;
 
 interface RuntimeCalibrationSnapshot {
-  latencyMs: number;
+  rttCompensationMs: number;
   clockOffsetMs: number;
   sampleCount: number;
   calibratedAt: number;
@@ -708,13 +708,22 @@ export default defineContentScript({
     async function pushRuntimeCalibrationToOverlay() {
       const cached = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY);
       if (!cached) return false;
-      if (!Number.isFinite(cached.latencyMs) || !Number.isFinite(cached.clockOffsetMs)) return false;
-      postToOverlay({ type: 'RUNTIME_CALIBRATION', data: cached });
+      if (!Number.isFinite(cached.rttCompensationMs) || !Number.isFinite(cached.clockOffsetMs)) return false;
+      postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { ...cached, latencyMs: cached.rttCompensationMs } });
       return true;
+    }
+
+    async function shouldContinueRuntimeCalibration() {
+      const cfg = await getSaleConfig();
+      return getNextSaleTime(cfg) - Date.now() > EARLY_FIRE_BOUNDARY_MS;
     }
 
     async function runRuntimeCalibration(reason: string) {
       if (calibrationInFlight) return false;
+      if (!(await shouldContinueRuntimeCalibration())) {
+        postToOverlay({ type: 'calibration_quiet_window_entered', data: { reason } });
+        return false;
+      }
       calibrationInFlight = true;
       try {
         const auth = await getFreshAuth();
@@ -725,14 +734,17 @@ export default defineContentScript({
           authorization: legacy.authorization,
           bigmodelOrganization: legacy.bigmodelOrganization,
           bigmodelProject: legacy.bigmodelProject,
+        }, undefined, {
+          shouldContinue: shouldContinueRuntimeCalibration,
+          onEvent: (event) => postToOverlay({ type: event.type, data: { reason, ...(event.details || {}) } }),
         });
 
-        if (!Number.isFinite(result.latencyMs) || !Number.isFinite(result.clockOffsetMs) || result.probes.length === 0) {
+        if (!Number.isFinite(result.rttCompensationMs) || !Number.isFinite(result.clockOffsetMs) || result.probes.length === 0) {
           return false;
         }
 
         const snapshot: RuntimeCalibrationSnapshot = {
-          latencyMs: Math.max(0, Math.round(result.latencyMs)),
+          rttCompensationMs: Math.max(0, Math.round(result.rttCompensationMs)),
           clockOffsetMs: Math.round(result.clockOffsetMs),
           sampleCount: result.probes.length,
           calibratedAt: Date.now(),
@@ -740,7 +752,7 @@ export default defineContentScript({
         };
 
         await safeSet(RUNTIME_CALIBRATION_KEY, snapshot);
-        postToOverlay({ type: 'RUNTIME_CALIBRATION', data: snapshot });
+        postToOverlay({ type: 'RUNTIME_CALIBRATION', data: { ...snapshot, latencyMs: snapshot.rttCompensationMs } });
         return true;
       } catch {
         return false;
