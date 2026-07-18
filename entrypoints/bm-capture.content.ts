@@ -3,6 +3,8 @@
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
 import type { AutoFirePlanShot } from '../lib/api/fire-plan';
+import { FireRunner } from '../lib/api/fire-runner';
+import { buildFireSchedule } from '../lib/api/fire-scheduler';
 import { buildStrikeQueue, type StrikeShot, type StrikeTarget } from '../lib/api/strike-plan';
 import { calibrate } from '../lib/api/runtime-calibration';
 import { fireStore, FIRE_CONFIG_DEFAULT, type FireConfig } from '../lib/settings/fire';
@@ -971,30 +973,38 @@ export default defineContentScript({
     // ── Alpha Auto-Fire execution ────────────────────────────────────────────
     async function runAutoFirePlan(startMs: number, authArg: any) {
       const { valid, selectedIds } = await getAutoFireSnapshot();
-      // Auto mode now uses the same sequential strike logic as manual mode.
-      // Key difference: starts firing at targetTime - 500ms for pre-fire advantage.
-      const targets: StrikeTarget[] = selectedIds.map((id, i) => ({ productId: id, priority: i + 1 }));
-      await runStrikeSequence(startMs - 500, authArg, {
-        label: 'Auto',
+      // Auto mode uses the same explicit runner lifecycle as manual mode.
+      await prepareAndRun({
+        runId: `auto-${startMs}-${Date.now()}`,
         mode: 'auto',
-        enableBusyBackoff: false,
-        pollPayment: true,
+        startMs,
+        authArg,
+        reason: 'auto',
       });
     }
 
     // ── Unified strike sequence: shared by default strike and burst mode ──
     let currentStrikeCancel: (() => void) | null = null;
+    let currentFireRunner: FireRunner | null = null;
+    let preparingFireRun = false;
     let lastShotSentAt = 0;
 
     interface StrikeSequenceOptions {
       label: string;
-      mode: 'manual' | 'burst';
+      mode: 'manual' | 'burst' | 'auto';
+      runId?: string;
       burstIntervalMs?: number;
       enableBusyBackoff: boolean;
       pollPayment: boolean;
     }
 
     async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
+      if (preparingFireRun || currentFireRunner) {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
+        return;
+      }
+      preparingFireRun = true;
+      try {
       const auth = coerceToPlatformAuth(authArg);
       if (!auth) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
@@ -1017,14 +1027,8 @@ export default defineContentScript({
         return;
       }
 
-      // Reserve all tickets for this strike (will be released on cancel/expiry)
-      const reservedKeys = new Set(plan.shots.map((s) => s.ticket + ':' + s.randstr + ':' + s.createdAt));
-      _ticketPool = _ticketPool.filter((t: any) => !reservedKeys.has(t.ticket + ':' + t.randstr + ':' + t.createdAt));
-      writePageTicketStore();
-      const remainingInfo = await getTicketInfo();
-      postToOverlay({ type: 'TICKET_COUNT', count: remainingInfo.count, tickets: remainingInfo.tickets });
-
       const burstIntervalMs = options.burstIntervalMs ?? Math.max(50, Math.round(fireConfig.burstIntervalMs) || 2100);
+      const intervalMs = options.mode === 'burst' ? 500 : burstIntervalMs;
       postToOverlay({
         type: 'FIRE_RESULT',
         line: `> ${options.label} ${plan.shots.length} shots · ${burstIntervalMs}ms`,
@@ -1045,36 +1049,16 @@ export default defineContentScript({
         },
       });
 
-      const previewAbortCtrl = new AbortController();
       let cancelled = false;
-      const timers: ReturnType<typeof setTimeout>[] = [];
-
+      let runner: FireRunner | null = null;
       const cancelAll = () => {
         if (cancelled) return;
         cancelled = true;
         currentStrikeCancel = null;
-        previewAbortCtrl.abort();
-        for (const id of timers) clearTimeout(id);
-        timers.length = 0;
-        // Return unused reserved tickets back to pool
-        const usedShotIdx = shotIdx; // how many shots already fired
-        for (let j = usedShotIdx; j < plan.shots.length; j++) {
-          const s = plan.shots[j];
-          _ticketPool.push({ ticket: s.ticket, randstr: s.randstr, createdAt: s.createdAt });
-        }
-        writePageTicketStore();
-        postToOverlay({ type: 'FIRE_RESULT', line: `> Cancelled — returned ${plan.shots.length - usedShotIdx} unused tickets` });
+        runner?.cancel();
       };
 
-      // Prevent concurrent strikes — block re-fire while active
-      if (currentStrikeCancel) {
-        postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
-        return;
-      }
-      currentStrikeCancel = cancelAll;
-
       const total = plan.shots.length;
-      let succeeded = false;
 
       const fireOne = async (shot: StrikeShot, idx: number): Promise<string> => {
         if (cancelled) return 'cancelled';
@@ -1091,8 +1075,6 @@ export default defineContentScript({
 
           if (result.success) {
             const session = result.data!;
-            succeeded = true;
-            cancelAll();
             const bizId = session.bizId as string;
             const amount = session.amount as number;
             const productId = session.productId as string;
@@ -1191,39 +1173,86 @@ export default defineContentScript({
         }
       };
 
-      
-      let shotIdx = 0;
-      const MIN_GAP_MS = 3000;
-
-      const scheduleNext = () => {
-        if (cancelled || succeeded || shotIdx >= total) {
-          if (!succeeded && !cancelled) {
-            cancelAll();
-            postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ${total} shots, ${shotIdx} sent` });
-            postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
+      const runId = options.runId || `${options.mode}-${Date.now()}`;
+      const schedule = buildFireSchedule({
+        runId,
+        mode: options.mode,
+        startMs,
+        intervalMs,
+        shots: plan.shots.map((shot, index) => ({
+          shotId: `shot-${index}`,
+          productId: shot.productId,
+          productPriority: shot.priority,
+        })),
+      });
+      const shotsById = new Map(schedule.slots.map((slot, index) => [slot.shotId, plan.shots[index]]));
+      runner = new FireRunner({
+        ...schedule,
+        maxInFlight: options.mode === 'burst' ? 2 : 1,
+        onEvent: (event) => {
+          if (event.type === 'tickets_reserved') {
+            const reservedKeys = new Set(plan.shots.map((shot) => shot.ticket + ':' + shot.randstr + ':' + shot.createdAt));
+            _ticketPool = _ticketPool.filter((ticket: any) => !reservedKeys.has(ticket.ticket + ':' + ticket.randstr + ':' + ticket.createdAt));
+            writePageTicketStore();
+            void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
           }
-          return;
-        }
+          if (event.type === 'tickets_returned') {
+            for (const shotId of (event.payload.shotIds as string[]) || []) {
+              const shot = shotsById.get(shotId);
+              if (shot && !_ticketPool.some((ticket: any) => ticket.ticket === shot.ticket && ticket.randstr === shot.randstr && ticket.createdAt === shot.createdAt)) {
+                _ticketPool.push({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt });
+              }
+            }
+            writePageTicketStore();
+            void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — returned unused tickets' });
+          }
+        },
+        executeShot: async ({ shotId, requestSeq }) => {
+          const shot = shotsById.get(shotId);
+          if (!shot) return { outcome: 'error' as const };
+          const outcome = await fireOne(shot, requestSeq);
+          postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${requestSeq + 1}/${total})` });
+          return { outcome: (['success', 'busy', 'soldout', 'neterr', 'cancelled'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'cancelled' };
+        },
+      });
+      currentFireRunner = runner;
+      currentStrikeCancel = cancelAll;
+      const result = await runner.run();
+      if (!result.accepted) {
+        if (currentFireRunner === runner) currentFireRunner = null;
+        currentStrikeCancel = null;
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
+        return;
+      }
+      if (result.reason === 'complete') {
+        postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ${total} shots` });
+        postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
+      }
+      currentStrikeCancel = null;
+      if (currentFireRunner === runner) currentFireRunner = null;
+      } finally {
+        preparingFireRun = false;
+      }
+    }
 
-        const shot = plan.shots[shotIdx];
-        const idx = shotIdx;
-        shotIdx++;
-
-        let delay = shotIdx === 1 ? Math.max(0, startMs - Date.now()) : MIN_GAP_MS;
-        delay = Math.round(delay * (0.85 + Math.random() * 0.3));
-
-        timers.push(
-          setTimeout(async () => {
-            const outcome = await fireOne(shot, idx);
-            postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${shotIdx}/${total})` });
-            scheduleNext();
-          }, delay),
-        );
-      };
-
-      scheduleNext();
-
-      scheduleNext();
+    async function prepareAndRun(input: {
+      runId: string;
+      mode: 'manual' | 'burst' | 'auto';
+      startMs: number;
+      authArg?: any;
+      reason?: string;
+    }) {
+      const mode = input.mode;
+      const label = mode === 'burst' ? 'BURST' : mode === 'auto' ? 'Auto' : 'Strike';
+      await runStrikeSequence(input.startMs, input.authArg, {
+        runId: input.runId,
+        label,
+        mode,
+        burstIntervalMs: mode === 'burst' ? 500 : undefined,
+        enableBusyBackoff: mode === 'manual',
+        pollPayment: true,
+      });
     }
 
     async function strike(startMs: number, authOverride?: any) {
@@ -1232,12 +1261,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await runStrikeSequence(startMs, auth, {
-        label: 'Strike',
-        mode: 'manual',
-        enableBusyBackoff: true,
-        pollPayment: true,
-      });
+      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', startMs, authArg: auth, reason: 'manual' });
     }
 
     async function burstStrike(startMs: number, authOverride?: any) {
@@ -1246,13 +1270,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await runStrikeSequence(startMs, auth, {
-        label: 'BURST',
-        mode: 'burst',
-        burstIntervalMs: 500,
-        enableBusyBackoff: false,
-        pollPayment: true,
-      });
+      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', startMs, authArg: auth, reason: 'burst' });
     }
 
     async function prefireAndBurst(startMs: number, reason: string) {
@@ -1314,6 +1332,24 @@ export default defineContentScript({
           const startMs: number = (event.data.data?.startMs) ?? Date.now();
           const reason: string = event.data.data?.reason ?? 'prefire-fire';
           prefireAndBurst(startMs, reason);
+        }
+        if (event.data.type === 'PREFIRE_PREPARE') {
+          const authStatus = await getPrefireAuthStatus();
+          if (!authStatus.ok) {
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Prefire blocked: auth unavailable' });
+            return;
+          }
+          await prepareAndRun({
+            runId: `auto-${event.data.data?.targetMs}-${Date.now()}`,
+            mode: 'auto',
+            startMs: event.data.data?.startMs ?? Date.now(),
+            authArg: authStatus.headers,
+            reason: event.data.data?.reason || 'auto',
+          });
+        }
+        if (event.data.type === 'CANCEL_FIRE') {
+          currentFireRunner?.cancel();
+          currentStrikeCancel?.();
         }
         if (event.data.type === 'GET_SALE_TIME') {
           const cfg = await getSaleConfig();

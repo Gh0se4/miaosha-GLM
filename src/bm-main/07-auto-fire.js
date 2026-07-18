@@ -4,7 +4,7 @@ function scheduleAutoFire(nextSaleTime) {
   _rt.autoFired = false;
   _rt.nextSaleTime = nextSaleTime;
 
-  var EARLY_MS = 10; // fire 10ms before target to compensate for setTimeout jitter
+  var EARLY_MS = 3000; // give the content script an explicit preparation window
   // Server-aligned baseline: offset > 0 means server clock is ahead of local clock.
   var fireAtServer = nextSaleTime - _rt.latencyMs - EARLY_MS;
   var nowServer = Date.now() + _rt.clockOffsetMs;
@@ -48,7 +48,16 @@ function dispatchAutoFire() {
   if (autoEl) autoEl.textContent = 'Fired @ ' + ts.slice(11);
   var lg = document.getElementById('_log');
   if (lg) lg.innerHTML += '> Auto-fire dispatched @ ' + ts + '<br>';
-  // Convert server-aligned fire point back to local epoch for content-script timers.
-  var startMs = _rt.nextSaleTime - _rt.latencyMs - 10 - _rt.clockOffsetMs;
-  window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: startMs, reason: 'auto' } }, '*');
+  // Convert the server-aligned preparation point back to local epoch. The
+  // content script receives all timing inputs explicitly; do not hide a second
+  // offset in this dispatch.
+  window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_PREPARE', data: {
+    targetMs: _rt.nextSaleTime,
+    preparationLeadMs: 3000,
+    startMs: _rt.nextSaleTime - _rt.latencyMs - 3000 - _rt.clockOffsetMs,
+    rttCompensationMs: _rt.latencyMs,
+    clockOffsetMs: _rt.clockOffsetMs,
+    earlyOffsetMs: 3000,
+    reason: 'auto'
+  } }, '*');
 }
