@@ -1068,11 +1068,11 @@ export default defineContentScript({
             return 'success';
           } else if (result.metadata?.classified?.outcome === 'soldout') {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': sold-out today (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'soldout', code: 200, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'sold out', responsibility: (result.metadata?.classified as any)?.responsibility } });
             return 'soldout';
           } else if (result.metadata?.classified?.outcome === 'busy' && (result.metadata?.classified as any)?.code === 555) {
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': server-busy-555 (' + rtt + 'ms)' });
-            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy' } });
+            postToOverlay({ type: 'FIRE_SHOT_RESULT', data: { shotIdx: idx, productId: shot.productId, priority: shot.priority, outcome: 'busy', code: 555, rtt, sentAt: t1, ticketMask: maskTicket(shot.ticket), rawBody: getRawBody(result), rawServerMsg: (result.metadata?.classified as any)?.rawServerMsg || '', serverMsg: (result.metadata?.classified as any)?.serverMsg || 'server busy', responsibility: (result.metadata?.classified as any)?.responsibility } });
             return 'busy';
           } else {
             const rawBody = result.metadata?.raw;

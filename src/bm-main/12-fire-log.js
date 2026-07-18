@@ -51,7 +51,7 @@ var _log_v2PersistenceWarningShown = false;
       userAgent: navigator.userAgent,
       totalShots: _log_entries.length,
       summary: {
-        success: 0, busy: 0, soldout: 0, error: 0,
+        success: 0, busy: 0, soldout: 0, waf: 0, error: 0,
         neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0
       },
       entries: _log_entries
@@ -224,7 +224,7 @@ var _log_v2PersistenceWarningShown = false;
       // Build log line
       var tag = '>[#' + entry.shotIdx + '/' + (entry.wave) + '][P' + entry.priority + ']';
       var outcomeColor = {
-        success: '#059669', soldout: '#64748b', busy: '#d97706',
+        success: '#059669', soldout: '#64748b', busy: '#d97706', waf: '#be123c',
         error: '#dc2626', neterr: '#dc2626',
         captchaService: '#7c3aed', captchaInvalid: '#ea580c', captchaRisk: '#be123c'
       }[entry.outcome] || '#475569';
@@ -268,7 +268,7 @@ var _log_v2PersistenceWarningShown = false;
   window.__fireLogClear = clearLog;
   window.__fireLogEntries = function() { return _log_entries; };
   window.__fireLogSummary = function() {
-    var s = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+    var s = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
     for (var i = 0; i < _log_entries.length; i++) {
       var o = _log_entries[i].outcome;
       if (s[o] !== undefined) s[o]++;

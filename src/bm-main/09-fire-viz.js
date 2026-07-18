@@ -5,7 +5,7 @@ var _fv_logEl    = null;
 var _fv_cursor   = null;
 var _fv_autoScr  = true;
 var _fv_lineNo   = 0;
-var _fv_counts   = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+var _fv_counts   = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
 var _fv_startMs  = 0;
 var _fv_total    = 0;
 var _fv_done     = 0;
@@ -25,6 +25,7 @@ var _FV_OUTCOME = {
   success:        { user: '成功',     dev: 'ORDER',                  color: '#059669', icon: '✓' },
   busy:           { user: '限流',     dev: '555 / server busy',      color: '#d97706', icon: '⚠' },
   soldout:        { user: '售罄',     dev: 'sold-out',               color: '#64748b', icon: '⊘' },
+  waf:            { user: 'WAF 拦截', dev: 'WAF HTML challenge',     color: '#be123c', icon: '⛔' },
   error:          { user: '错误',     dev: 'code=N / serverMsg',     color: '#dc2626', icon: '✗' },
   neterr:         { user: '网络错误', dev: 'net-err',                color: '#dc2626', icon: '⚡' },
   captchaService: { user: '验证码繁忙', dev: 'Captcha QPS limit',    color: '#7c3aed', icon: '☁' },
@@ -254,7 +255,7 @@ function _fv_show(data) {
     _fv_lineNo  = 0;
     _fv_logLines = [];
     _fv_shotsData = [];
-    _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+    _fv_counts  = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
     _fv_startMs = Date.now();
     _fv_total   = 0;
     _fv_done    = 0;
@@ -420,7 +421,7 @@ function _fv_updateStats() {
   var sb = document.getElementById(_NS + 'fv_sb');
   if (sb) sb.querySelector('b').textContent = String(_fv_counts.busy);
   var se = document.getElementById(_NS + 'fv_se');
-  if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
+  if (se) se.querySelector('b').textContent = String(_fv_counts.waf + _fv_counts.error + _fv_counts.neterr);
   var sd = document.getElementById(_NS + 'fv_sd');
   if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
   var sc = document.getElementById(_NS + 'fv_sc');

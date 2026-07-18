@@ -15,6 +15,7 @@ function deferred<T>() {
 function createContentHarness(options: {
   capture?: Promise<any>;
   paymentStateFails?: boolean;
+  orderResult?: any;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -131,7 +132,7 @@ function createContentHarness(options: {
     if (id.includes('platform')) return {
       bigmodelAdapter: {
         authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
-        orderPipeline: { run: async () => ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }) },
+        orderPipeline: { run: async () => options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }) },
       },
     };
     if (id.includes('runtime-calibration')) return { calibrate: async () => ({}) };
@@ -360,5 +361,24 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.runnerCount).toBe(0);
     expect(harness.runnerEvents).not.toContain('tickets_reserved');
     expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
+  });
+
+  it.each([
+    ['busy', { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' }],
+    ['soldout', { outcome: 'soldout', code: 200, serverMsg: 'sold out', rawServerMsg: 'sold out' }],
+  ])('includes classified responsibility in the %s legacy shot payload', async (_outcome, classified) => {
+    const responsibility = { source: 'client-side-classification', subject: 'client', target: 'request', cause: 'inference' };
+    const harness = createContentHarness({
+      orderResult: { success: false, error: classified.serverMsg, metadata: { classified: { ...classified, responsibility } } },
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await Promise.resolve();
+
+    expect(harness.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data).toMatchObject({
+      outcome: classified.outcome,
+      responsibility,
+    });
   });
 });

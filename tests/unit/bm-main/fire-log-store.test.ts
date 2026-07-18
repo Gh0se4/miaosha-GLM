@@ -285,4 +285,36 @@ describe('Fire Log V2 store', () => {
     const store = (window.__fireLogV2Store as FireLogStore);
     expect((await store.readAll()).shots.map((shot) => shot.httpStatus)).toEqual([555, 503, 201, 0]);
   });
+
+  it('renders and summarizes waf as its own legacy diagnostic outcome', () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'waf-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      document,
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 }, setTimeout: () => 0,
+      postToOverlay: () => {},
+    });
+    document.body.innerHTML = '';
+    for (const name of ['09-fire-viz.js', '11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 1, burstIntervalMs: 100 });
+
+    for (const listener of listeners) listener({ data: {
+      __overlay: true,
+      type: 'FIRE_SHOT_RESULT',
+      data: { shotIdx: 0, productId: 'p-waf', outcome: 'waf', code: 500, rtt: 1 },
+    } });
+
+    expect(scope._fv_counts).toMatchObject({ waf: 1, error: 0 });
+    expect(document.body.textContent).toContain('WAF 拦截');
+    expect((window.__fireLogSummary as () => Record<string, number>)()).toMatchObject({ waf: 1, error: 0 });
+    document.body.innerHTML = '';
+  });
 });
