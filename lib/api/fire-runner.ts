@@ -110,7 +110,10 @@ export class FireRunner {
         if (stopReason !== 'complete') break;
 
         let launched = false;
-        const maxInFlight = Math.max(1, Math.floor(this.input.maxInFlight));
+        const configuredMaxInFlight = Math.max(1, Math.floor(this.input.maxInFlight));
+        const maxInFlight = this.input.mode === 'burst'
+          ? Math.min(2, configuredMaxInFlight)
+          : configuredMaxInFlight;
         while (!this.cancelled && inFlight.size < maxInFlight) {
           const next = this.shots.find((shot) => shot.state === 'reserved');
           if (!next) break;
@@ -161,6 +164,7 @@ export class FireRunner {
       }
 
       if (this.cancelled && stopReason === 'complete') stopReason = 'cancelled';
+      await Promise.all([...inFlight]);
       this.returnUnstarted();
       this.event('run_finished', { runId: this.input.runId, reason: stopReason });
       return { accepted: true, reason: stopReason };

@@ -15,6 +15,9 @@ function deferred<T>() {
 async function flush() {
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function makeInput(overrides: Partial<FireRunInput> = {}) {
@@ -95,6 +98,27 @@ describe('FireRunner', () => {
     await running;
   });
 
+  it('caps burst mode at two in-flight shots even when input requests three', async () => {
+    const pending = [deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>()];
+    const started: string[] = [];
+    const fixture = makeInput({
+      mode: 'burst',
+      maxInFlight: 3,
+      executeShot: async ({ shotId }) => {
+        started.push(shotId);
+        return pending[Number(shotId.slice(1)) - 1].promise;
+      },
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+    const running = runner.run();
+
+    await flush();
+    const startedBeforeSettlement = started.length;
+    pending.forEach((item) => item.resolve({ outcome: 'neterr' }));
+    await running;
+    expect(startedBeforeSettlement).toBe(2);
+  });
+
   it('anchors manual starts to the previous fetch-started time plus interval', async () => {
     const fixture = makeInput({
       slots: [
@@ -125,6 +149,37 @@ describe('FireRunner', () => {
     expect(fixture.events.map(({ type }) => type)).toContain('run_finished');
   });
 
+  it('drains fetch-started shots before finishing after a terminal outcome', async () => {
+    for (const outcome of ['success', 'waf', 'cancelled'] as const) {
+      const pending = [deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>()];
+      const fixture = makeInput({
+        runId: `terminal-${outcome}`,
+        mode: 'burst',
+        maxInFlight: 2,
+        executeShot: async ({ shotId }) => pending[Number(shotId.slice(1)) - 1].promise,
+      });
+      const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+      const running = runner.run();
+
+      await flush();
+      pending[0].resolve({ outcome });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await flush();
+      const contender = makeInput({ runId: `contender-${outcome}`, slots: [] });
+      const contenderRunner = new FireRunner(contender.input, { now: contender.now, waitUntil: contender.waitUntil });
+      const contenderResult = await contenderRunner.run();
+      const finishedBeforeDrain = fixture.events.map(({ type }) => type).includes('run_finished');
+
+      pending[1].resolve({ outcome: 'neterr' });
+      await running;
+      expect(contenderResult).toEqual({ accepted: false, reason: 'run_locked' });
+      expect(finishedBeforeDrain).toBe(false);
+      expect(fixture.events.map(({ type }) => type)).toContain('run_finished');
+      expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'settled', 'returned']);
+      await expect(contenderRunner.run()).resolves.toEqual({ accepted: true, reason: 'complete' });
+    }
+  });
+
   it('returns only tickets that had not started fetching when cancelled', async () => {
     const pending = [deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>()];
     const fixture = makeInput({
@@ -137,13 +192,44 @@ describe('FireRunner', () => {
 
     await flush();
     runner.cancel();
+    expect(fixture.events.map(({ type }) => type)).not.toContain('run_finished');
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['fetch-started', 'fetch-started', 'reserved']);
+    pending.forEach((item) => item.resolve({ outcome: 'cancelled' }));
     await running;
     expect(runner.snapshot().map(({ shotId, state }) => ({ shotId, state }))).toEqual([
-      { shotId: 's1', state: 'fetch-started' },
-      { shotId: 's2', state: 'fetch-started' },
+      { shotId: 's1', state: 'settled' },
+      { shotId: 's2', state: 'settled' },
       { shotId: 's3', state: 'returned' },
     ]);
-    pending.forEach((item) => item.resolve({ outcome: 'cancelled' }));
+  });
+
+  it('returns every reserved ticket when cancelled before any fetch starts', async () => {
+    const fixture = makeInput({
+      slots: [{ shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 100 }],
+    });
+    const runner = new FireRunner(fixture.input, {
+      now: fixture.now,
+      waitUntil: async () => new Promise<void>(() => {}),
+    });
+    const running = runner.run();
+
+    await flush();
+    runner.cancel();
+    await running;
+    expect(fixture.starts).toEqual([]);
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['returned']);
+  });
+
+  it.each(['cancelled', 'waf'] as const)('%s stops and returns future tickets', async (outcome) => {
+    const fixture = makeInput({
+      mode: 'burst',
+      maxInFlight: 1,
+      executeShot: async () => ({ outcome }),
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await runner.run();
+    expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'returned', 'returned']);
   });
 
   it('clears its pending default timer when cancelled', async () => {
