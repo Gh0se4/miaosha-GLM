@@ -183,6 +183,43 @@ var _log_initialVisibilityState = '';
     postToOverlay('FIRE_RESULT', { line: text });
   }
 
+  function _logFiniteMs(value) {
+    return typeof value === 'number' && isFinite(value) ? value : null;
+  }
+
+  function _logDurationMs(end, start) {
+    var endMs = _logFiniteMs(end);
+    var startMs = _logFiniteMs(start);
+    return endMs !== null && startMs !== null && endMs >= startMs ? endMs - startMs : undefined;
+  }
+
+  // Keep derived fields beside their source timestamps so exports remain
+  // useful even when a compatibility sender did not calculate them.
+  function _logAddShotMetrics(shot) {
+    var timing = shot && shot.timing || {};
+    var plannedAt = _logFiniteMs(shot && shot.plannedAt);
+    var fetchCalledAt = _logFiniteMs(timing.fetchCalledAt);
+    var releasedAt = _logFiniteMs(shot && shot.releasedAt);
+    var actualStartAt = fetchCalledAt !== null ? fetchCalledAt : releasedAt;
+
+    if (plannedAt !== null && actualStartAt !== null && shot.scheduleErrorMs === undefined) {
+      shot.scheduleErrorMs = actualStartAt - plannedAt;
+    }
+    // The runner is the only layer that knows the prior actual fetch start.
+    // Do not infer queueDelayMs from a compatibility payload without that
+    // anchor; an omitted metric is preferable to a misleading one.
+
+    var bridgeWaitMs = _logDurationMs(timing.fetchCalledAt, timing.bridgeReceivedAt);
+    var fetchToHeadersMs = _logDurationMs(timing.responseHeadersAt, timing.fetchCalledAt);
+    var responseBodyMs = _logDurationMs(timing.bodyCompletedAt, timing.responseHeadersAt);
+    var transportTotalMs = _logDurationMs(timing.bodyCompletedAt, timing.bridgeReceivedAt);
+    if (bridgeWaitMs !== undefined && shot.bridgeWaitMs === undefined) shot.bridgeWaitMs = bridgeWaitMs;
+    if (fetchToHeadersMs !== undefined && shot.fetchToHeadersMs === undefined) shot.fetchToHeadersMs = fetchToHeadersMs;
+    if (responseBodyMs !== undefined && shot.responseBodyMs === undefined) shot.responseBodyMs = responseBodyMs;
+    if (transportTotalMs !== undefined && shot.transportTotalMs === undefined) shot.transportTotalMs = transportTotalMs;
+    return shot;
+  }
+
   // Listen for fire events
   window.addEventListener('message', function(e) {
     if (!e.data || !e.data[MSG_OVL]) return;
@@ -238,7 +275,7 @@ var _log_initialVisibilityState = '';
     }
 
     if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
-      var shot = d.data;
+      var shot = _logAddShotMetrics(d.data);
       _log_shotSeq++;
       var entry = {
         seq: _log_shotSeq,
@@ -271,6 +308,8 @@ var _log_initialVisibilityState = '';
         priority: shot.priority,
         requestSeq: shot.requestSeq,
         plannedAt: shot.plannedAt,
+        releasedAt: shot.releasedAt,
+        mode: shot.mode,
         ticket: shot.ticket,
         randstr: shot.randstr,
         request: shot.request,
@@ -285,6 +324,12 @@ var _log_initialVisibilityState = '';
         statusText: shot.statusText || (shot.response && shot.response.statusText) || '',
         rttMs: entry.rttMs,
         timing: shot.timing,
+        scheduleErrorMs: shot.scheduleErrorMs,
+        queueDelayMs: shot.queueDelayMs,
+        bridgeWaitMs: shot.bridgeWaitMs,
+        fetchToHeadersMs: shot.fetchToHeadersMs,
+        responseBodyMs: shot.responseBodyMs,
+        transportTotalMs: shot.transportTotalMs,
         responseBody: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
         rawServerMessage: entry.rawServerMsg
       });

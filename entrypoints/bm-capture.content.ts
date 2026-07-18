@@ -1107,8 +1107,38 @@ export default defineContentScript({
 
       const total = plan.shots.length;
       const releasedAtByShot = new Map<string, number>();
+      const fetchCalledAtByShot = new Map<string, number>();
       const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
         const transport = result?.metadata?.transport || {};
+        const timing = transport.timing || extra.timing;
+        const plannedAt = startMs + idx * intervalMs;
+        const fetchCalledAt = timing?.fetchCalledAt;
+        const releasedAt = releasedAtByShot.get(`shot-${idx}`);
+        const actualStartAt = typeof fetchCalledAt === 'number' ? fetchCalledAt : releasedAt;
+        let previousFetchCalledAt: number | undefined;
+        for (let previousIndex = idx - 1; previousIndex >= 0; previousIndex--) {
+          const previous = fetchCalledAtByShot.get(`shot-${previousIndex}`);
+          if (typeof previous === 'number') {
+            previousFetchCalledAt = previous;
+            break;
+          }
+        }
+        const duration = (end?: number, start?: number) => (
+          typeof end === 'number' && typeof start === 'number' && end >= start ? end - start : undefined
+        );
+        const metrics: Record<string, number> = {};
+        if (typeof actualStartAt === 'number') metrics.scheduleErrorMs = actualStartAt - plannedAt;
+        if (typeof fetchCalledAt === 'number' && options.mode !== 'burst') {
+          metrics.queueDelayMs = Math.max(0, fetchCalledAt - Math.max(plannedAt, (previousFetchCalledAt ?? Number.NEGATIVE_INFINITY) + intervalMs));
+        }
+        const bridgeWaitMs = duration(timing?.fetchCalledAt, timing?.bridgeReceivedAt);
+        const fetchToHeadersMs = duration(timing?.responseHeadersAt, timing?.fetchCalledAt);
+        const responseBodyMs = duration(timing?.bodyCompletedAt, timing?.responseHeadersAt);
+        const transportTotalMs = duration(timing?.bodyCompletedAt, timing?.bridgeReceivedAt);
+        if (bridgeWaitMs !== undefined) metrics.bridgeWaitMs = bridgeWaitMs;
+        if (fetchToHeadersMs !== undefined) metrics.fetchToHeadersMs = fetchToHeadersMs;
+        if (responseBodyMs !== undefined) metrics.responseBodyMs = responseBodyMs;
+        if (transportTotalMs !== undefined) metrics.transportTotalMs = transportTotalMs;
         const request = transport.request;
         const response = transport.body === undefined && transport.status === undefined ? undefined : {
           headers: transport.headers || {}, body: transport.body || '', status: transport.status, statusText: transport.statusText,
@@ -1116,10 +1146,11 @@ export default defineContentScript({
         return {
           runId, shotId: `shot-${idx}`, shotIdx: idx, productId: shot.productId, priority: shot.priority,
           ticket: shot.ticket, randstr: shot.randstr, ticketMask: maskTicket(shot.ticket),
-          requestSeq: idx, plannedAt: startMs + idx * intervalMs, outcome, rtt, sentAt,
-          releasedAt: releasedAtByShot.get(`shot-${idx}`),
-          request, response, timing: transport.timing,
+          requestSeq: idx, plannedAt, outcome, rtt, sentAt,
+          releasedAt, mode: options.mode,
+          request, response, timing,
           httpStatus: transport.status, statusText: transport.statusText,
+          ...metrics,
           ...extra,
         };
       };
@@ -1162,6 +1193,7 @@ export default defineContentScript({
             shotId: `shot-${idx}`,
             onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => {
               fetchTiming = timing;
+              fetchCalledAtByShot.set(`shot-${idx}`, timing.fetchCalledAt);
               fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId });
             },
             onAbortReady: fireRequest.setAbort,

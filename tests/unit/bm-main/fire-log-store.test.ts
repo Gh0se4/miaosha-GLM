@@ -235,9 +235,17 @@ describe('Fire Log V2 store', () => {
       runId: 'run-1', shotId: 'shot-1', shotIdx: 0, productId: 'product-1', priority: 1,
       ticket: 'full-ticket', randstr: 'full-randstr', plannedAt: 1000, requestSeq: 0,
       outcome: 'busy', httpStatus: 555, statusText: 'Busy', rtt: 12,
+      queueDelayMs: 4,
       request: { method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview', headers: { Authorization: 'secret', 'X-Trace': 'keep' }, body: '{"ticket":"full-ticket"}' },
       response: { headers: { 'Set-Cookie': 'secret', 'X-Response': 'keep' }, body: 'x'.repeat(800) },
       timing: { bridgeReceivedAt: 1003, fetchCalledAt: 1004, responseHeadersAt: 1008, bodyCompletedAt: 1012 },
+    });
+    emit('FIRE_SHOT_RESULT', {
+      runId: 'run-1', shotId: 'shot-normal', shotIdx: 1, productId: 'product-2', priority: 2,
+      ticket: 'full-ticket-2', randstr: 'full-randstr-2', plannedAt: 2000, releasedAt: 2000, requestSeq: 1,
+      outcome: 'soldout', httpStatus: 200, statusText: 'OK', rtt: 0,
+      queueDelayMs: 0,
+      timing: { bridgeReceivedAt: 2000, fetchCalledAt: 2000, responseHeadersAt: 2000, bodyCompletedAt: 2000 },
     });
     emit('FIRE_LOG_V2_EVENT', { type: 'run_finished', runId: 'run-1', reason: 'complete' });
     await Promise.resolve();
@@ -249,14 +257,43 @@ describe('Fire Log V2 store', () => {
     expect(report.runs).toHaveLength(1);
     expect((report.runs as Array<Record<string, unknown>>)[0]).toMatchObject({ runId: 'run-1', maxInFlight: 1 });
     expect((report.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual(expect.arrayContaining(['tickets_reserved', 'shot_released', 'fetch_started', 'run_finished']));
-    expect(report.shots).toHaveLength(1);
-    expect((report.shots as Array<Record<string, unknown>>)[0]).toMatchObject({
+    expect(report.shots).toHaveLength(2);
+    expect((report.shots as Array<Record<string, unknown>>).find((shot) => shot.shotId === 'shot-1')).toMatchObject({
       runId: 'run-1', shotId: 'shot-1', plannedAt: 1000, requestSeq: 0,
       httpStatus: 555, statusText: 'Busy', ticket: 'full-ticket', randstr: 'full-randstr',
       request: { method: 'POST', headers: { 'X-Trace': 'keep' } },
       response: { headers: { 'X-Response': 'keep' }, body: 'x'.repeat(800) },
       timing: { fetchCalledAt: 1004 },
+      scheduleErrorMs: 4,
+      queueDelayMs: 4,
+      bridgeWaitMs: 1,
+      fetchToHeadersMs: 4,
+      responseBodyMs: 4,
+      transportTotalMs: 9,
     });
+    expect((report.shots as Array<Record<string, unknown>>).find((shot) => shot.shotId === 'shot-normal')).toMatchObject({
+      scheduleErrorMs: 0,
+      queueDelayMs: 0,
+      bridgeWaitMs: 0,
+      fetchToHeadersMs: 0,
+      responseBodyMs: 0,
+      transportTotalMs: 0,
+    });
+  });
+
+  it('keeps cancelled unsent shots free of fabricated schedule or transport metrics', async () => {
+    const store = makeStore(dbName);
+    await store.writeShot({
+      shotId: 'unsent-1', sessionId: 's-1', runId: 'r-1', plannedAt: 1000,
+      terminalUnsentReason: 'cancelled',
+    });
+
+    const report = await store.exportLog('s-1') as { shots: Array<Record<string, unknown>> };
+    const shot = report.shots[0];
+    expect(shot).not.toHaveProperty('scheduleErrorMs');
+    expect(shot).not.toHaveProperty('queueDelayMs');
+    expect(shot).not.toHaveProperty('bridgeWaitMs');
+    expect(shot).not.toHaveProperty('transportTotalMs');
   });
 
   it('persists an aborted started shot from its V2 event without marking it unsent', async () => {

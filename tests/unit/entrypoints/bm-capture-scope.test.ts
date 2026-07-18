@@ -139,9 +139,10 @@ function createContentHarness(options: {
       bigmodelAdapter: {
         authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
         orderPipeline: { run: async (_ctx: any, _auth: any, fireRequest: any) => {
+          const resultTiming = options.orderResult?.metadata?.transport?.timing;
           fireRequest?.onFetchStarted?.({
             requestId: fireRequest.requestId,
-            timing: { bridgeReceivedAt: 1, bridgeReceivedPerfMs: 1, fetchCalledAt: 2, fetchCalledPerfMs: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
+            timing: resultTiming ?? { bridgeReceivedAt: 1, bridgeReceivedPerfMs: 1, fetchCalledAt: 2, fetchCalledPerfMs: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
           });
           return await (options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }));
         } },
@@ -443,6 +444,41 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data).toMatchObject({
       outcome: classified.outcome,
       responsibility,
+    });
+  });
+
+  it('records scheduler and transport metrics from MAIN-world timestamps', async () => {
+    const harness = createContentHarness({
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: {
+          classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' },
+          transport: {
+            status: 555,
+            timing: {
+              bridgeReceivedAt: 1_001,
+              bridgeReceivedPerfMs: 1,
+              fetchCalledAt: 1_005,
+              fetchCalledPerfMs: 5,
+              responseHeadersAt: 1_015,
+              bodyCompletedAt: 1_020,
+            },
+          },
+        },
+      },
+    });
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: 1_000 });
+
+    expect(harness.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data).toMatchObject({
+      plannedAt: 1_000,
+      scheduleErrorMs: 5,
+      queueDelayMs: 5,
+      bridgeWaitMs: 4,
+      fetchToHeadersMs: 10,
+      responseBodyMs: 5,
+      transportTotalMs: 19,
     });
   });
 
