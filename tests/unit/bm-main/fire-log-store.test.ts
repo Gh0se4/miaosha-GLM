@@ -279,9 +279,10 @@ describe('Fire Log V2 store', () => {
     listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 0, productId: 'p-1', code: 555 } } });
     listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 1, productId: 'p-2', code: 555, httpCode: 503 } } });
     listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 2, productId: 'p-3', code: 555, httpCode: 503, httpStatus: 201 } } });
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 3, productId: 'p-4', code: 555, httpCode: 503, httpStatus: 0 } } });
     await Promise.resolve();
     await Promise.resolve();
     const store = (window.__fireLogV2Store as FireLogStore);
-    expect((await store.readAll()).shots.map((shot) => shot.httpStatus)).toEqual([555, 503, 201]);
+    expect((await store.readAll()).shots.map((shot) => shot.httpStatus)).toEqual([555, 503, 201, 0]);
   });
 });
