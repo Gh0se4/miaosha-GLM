@@ -1,9 +1,22 @@
+export interface MainWorldTransportTiming {
+  bridgeReceivedAt: number;
+  bridgeReceivedPerfMs: number;
+  fetchCalledAt: number;
+  fetchCalledPerfMs: number;
+  responseHeadersAt: number;
+  bodyCompletedAt: number;
+}
+
 export interface XhrRequestOptions {
   method?: string;
   url: string;
   headers?: Record<string, string>;
   body?: string;
   withCredentials?: boolean;
+  requestId?: string;
+  runId?: string;
+  shotId?: string;
+  onFetchStarted?: (meta: { timing: MainWorldTransportTiming; requestId: string }) => void;
 }
 
 export interface XhrResponse<T = unknown> {
@@ -11,6 +24,23 @@ export interface XhrResponse<T = unknown> {
   statusText: string;
   data: T;
   headers: Record<string, string>;
+  timing: MainWorldTransportTiming;
+  requestId?: string;
+  runId?: string;
+  shotId?: string;
+}
+
+function localTiming(): MainWorldTransportTiming {
+  const now = Date.now();
+  const perfNow = typeof performance === 'undefined' ? now : performance.now();
+  return {
+    bridgeReceivedAt: now,
+    bridgeReceivedPerfMs: perfNow,
+    fetchCalledAt: now,
+    fetchCalledPerfMs: perfNow,
+    responseHeadersAt: now,
+    bodyCompletedAt: now,
+  };
 }
 
 function isExtensionContext(): boolean {
@@ -54,6 +84,10 @@ function sendBackgroundRequest<T>(opts: XhrRequestOptions): Promise<XhrResponse<
           statusText: res.statusText,
           data,
           headers: res.headers || {},
+          timing: localTiming(),
+          requestId: opts.requestId,
+          runId: opts.runId,
+          shotId: opts.shotId,
         });
       },
     );
@@ -94,6 +128,10 @@ function xhrRequestImpl<T>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
         statusText: xhr.statusText,
         data,
         headers,
+        timing: localTiming(),
+        requestId: opts.requestId,
+        runId: opts.runId,
+        shotId: opts.shotId,
       });
     };
 

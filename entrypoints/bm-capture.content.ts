@@ -11,7 +11,7 @@ import { captchaStore } from '../lib/settings/captcha';
 import { bigmodelAdapter } from '../lib/platform';
 import type { PlatformAuth } from '../lib/platform';
 import { createAuthStore } from '../lib/platform/shared/stores';
-import { xhrRequest, setMainWorldFetcher, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
+import { xhrRequest, setMainWorldFetcher, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 const TICKET_TTL_MS = 5 * 60 * 1000; // alpha: 5 minutes per-ticket lifecycle
@@ -669,29 +669,57 @@ function getRawBody(result: any): string {
 // ── MAIN world fetch relay ───────────────────────────────────────────────
 // Routes API requests through the page's native fetch (MAIN world) to avoid
 // Alibaba WAF detection of extension-origin requests.
-function mainWorldFetch(opts: {
-  method: string;
-  url: string;
+function mainWorldFetch(opts: XhrRequestOptions): Promise<{
+  status: number;
+  statusText: string;
+  body: string;
   headers: Record<string, string>;
-  body?: string;
-}): Promise<{ status: number; statusText: string; body: string }> {
+  timing: MainWorldTransportTiming;
+  requestId?: string;
+  runId?: string;
+  shotId?: string;
+}> {
   return new Promise((resolve, reject) => {
-    const reqId = Math.random().toString(36).slice(2);
-    function handler(ev: MessageEvent) {
-      if (ev.source !== window || !ev.data?.[MSG_EVT] || ev.data.type !== 'DO_FETCH_RESULT' || ev.data.reqId !== reqId) return;
+    const requestId = opts.requestId || Math.random().toString(36).slice(2);
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
       window.removeEventListener('message', handler);
+      if (timeout !== undefined) clearTimeout(timeout);
+      fn();
+    };
+    function handler(ev: MessageEvent) {
+      const incomingRequestId = ev.data?.requestId ?? ev.data?.reqId;
+      if (ev.source !== window || !ev.data?.[MSG_EVT] || incomingRequestId !== requestId) return;
+      if (ev.data.type === 'DO_FETCH_STARTED') {
+        opts.onFetchStarted?.({ timing: ev.data.timing, requestId });
+        return;
+      }
+      if (ev.data.type !== 'DO_FETCH_RESULT') return;
       if (ev.data.ok) {
-        resolve({ status: ev.data.status, statusText: ev.data.statusText, body: ev.data.body });
+        finish(() => resolve({
+          status: ev.data.status,
+          statusText: ev.data.statusText,
+          body: ev.data.body,
+          headers: ev.data.headers || {},
+          timing: ev.data.timing,
+          requestId: incomingRequestId,
+          runId: ev.data.runId,
+          shotId: ev.data.shotId,
+        }));
       } else {
-        reject(new Error(ev.data.error || 'fetch error'));
+        finish(() => reject(new Error(ev.data.error || 'fetch error')));
       }
     }
     window.addEventListener('message', handler);
-    window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', reqId, opts }, '*');
-    setTimeout(() => {
-      window.removeEventListener('message', handler);
-      reject(new Error("MAIN world fetch timeout"));
-    }, 3000);
+    window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', requestId, runId: opts.runId, shotId: opts.shotId, opts }, '*');
+    timeout = setTimeout(() => {
+      if (settled) return;
+      window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH_CANCEL', requestId }, '*');
+      finish(() => reject(new Error("MAIN world fetch timeout")));
+    }, 8000);
   });
 }
 
@@ -714,15 +742,19 @@ export default defineContentScript({
     // Route ALL API requests through the page's MAIN world fetch to avoid
     // Alibaba WAF detection of extension-origin requests.
     setMainWorldFetcher(async (fetchOpts: XhrRequestOptions): Promise<XhrResponse> => {
-      const result = await mainWorldFetch({
-        method: fetchOpts.method || 'GET',
-        url: fetchOpts.url,
-        headers: fetchOpts.headers || {},
-        body: fetchOpts.body,
-      });
+      const result = await mainWorldFetch(fetchOpts);
       let data: any;
       try { data = JSON.parse(result.body); } catch { data = result.body; }
-      return { status: result.status, statusText: result.statusText, data, headers: {} };
+      return {
+        status: result.status,
+        statusText: result.statusText,
+        data,
+        headers: result.headers,
+        timing: result.timing,
+        requestId: result.requestId,
+        runId: result.runId,
+        shotId: result.shotId,
+      };
     });
 
     async function getPrefireAuthStatus() {
