@@ -14,6 +14,7 @@ import { SALE_ALARM_MINUTES, SALE_TIME_DEFAULT, getNextSaleTime, saleTimeStore, 
 import { captchaStore } from '../lib/settings/captcha';
 import { bigmodelAdapter } from '../lib/platform';
 import type { PlatformAuth } from '../lib/platform';
+import { classifyPreviewError, classifyPreviewNetworkError, type ClassifiedShotResult } from '../lib/platform/adapters/bigmodel/order-pipeline';
 import { createAuthStore } from '../lib/platform/shared/stores';
 import { xhrRequest, setMainWorldFetcher, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
@@ -102,101 +103,6 @@ const PHASE_BEEPS: Record<number, number> = {
   10: 3,
    5: 4,
 };
-
-// ── /pay/preview response classification: subject -> target -> cause ──
-interface ErrorResponsibility {
-  subject: string;
-  target: string;
-  cause: string;
-}
-
-interface ClassifiedShotResult {
-  outcome:
-    | 'success'
-    | 'soldout'
-    | 'busy'
-    | 'error'
-    | 'neterr'
-    | 'captchaService'
-    | 'captchaInvalid'
-    | 'captchaRisk';
-  code: number;
-  serverMsg: string;
-  rawServerMsg: string;
-  responsibility: ErrorResponsibility;
-}
-
-function classifyPreviewError(body: { code?: number; msg?: string }, rawBodyText?: string): ClassifiedShotResult {
-  const code = body.code ?? 500;
-  const raw = body.msg || '';
-
-  if (code === 500 && raw.includes('验证码校验服务异常')) {
-    return {
-      outcome: 'captchaService',
-      code,
-      serverMsg: '【智谱 --> 腾讯验证码核销：QPS超限】' + raw,
-      rawServerMsg: raw,
-      responsibility: { subject: '智谱', target: '腾讯验证码核销', cause: '超过了《每秒并发请求量（QPS）限制》' },
-    };
-  }
-  if (code === 500 && raw.includes('验证码Ticket不合法')) {
-    return {
-      outcome: 'captchaInvalid',
-      code,
-      serverMsg: '【插件/用户 --> 腾讯验证码核销：ticket 无效或已过期】' + raw,
-      rawServerMsg: raw,
-      responsibility: { subject: '插件/用户', target: '腾讯验证码核销', cause: 'ticket 无效或已过期' },
-    };
-  }
-  if (code === 500 && raw.includes('验证存在安全风险')) {
-    return {
-      outcome: 'captchaRisk',
-      code,
-      serverMsg: '【腾讯验证码风控 --> 当前请求：环境存在安全风险】' + raw,
-      rawServerMsg: raw,
-      responsibility: { subject: '腾讯验证码风控', target: '当前请求', cause: '环境存在安全风险' },
-    };
-  }
-  if (code === 555 || raw.toLowerCase().includes('system busy')) {
-    return {
-      outcome: 'busy',
-      code,
-      serverMsg: '【智谱 --> 当前用户：2 秒滑动窗口限流】' + raw,
-      rawServerMsg: raw,
-      responsibility: { subject: '智谱', target: '当前用户', cause: '2 秒滑动窗口限流' },
-    };
-  }
-  // Detect WAF HTML response (Alibaba WAF challenge page)
-  const bodyText = rawBodyText || raw || '';
-  if (bodyText.indexOf('<!doctypehtml>') !== -1 || bodyText.indexOf('<html') !== -1) {
-    return {
-      outcome: 'error',
-      code: 500,
-      serverMsg: '⚠️ WAF拦截：阿里云WAF返回了HTML验证页面，当前会话可能已被风控。建议暂停1-2分钟后再试。',
-      rawServerMsg: bodyText.substring(0, 300),
-      responsibility: { subject: '阿里云WAF', target: '当前会话', cause: '请求被WAF识别为异常流量，返回HTML验证页面' },
-    };
-  }
-  // Unknown error — include raw body snippet for diagnostics
-  const snippet = bodyText.substring(0, 200);
-  return {
-    outcome: 'error',
-    code,
-    serverMsg: '【智谱/网络 --> 插件：服务端返回 ' + code + '】' + (snippet ? ' [' + snippet + ']' : ''),
-    rawServerMsg: snippet,
-    responsibility: { subject: '智谱/网络', target: '插件', cause: '服务端返回 ' + code + (snippet ? ' — ' + snippet : '') },
-  };
-}
-
-function neterrResponsibility(message: string): ClassifiedShotResult {
-  return {
-    outcome: 'neterr',
-    code: 0,
-    serverMsg: '【插件/网络 --> 智谱：请求失败】' + message,
-    rawServerMsg: message,
-    responsibility: { subject: '插件/网络', target: '智谱', cause: '请求失败' },
-  };
-}
 
 // ── In-memory ticket pool, backed by page sessionStorage ──
 let _ticketPool: any[] = [];
@@ -1171,13 +1077,10 @@ export default defineContentScript({
           } else {
             const rawBody = result.metadata?.raw;
             const rawBodyText = (result.metadata as any)?.rawBodyText || (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody || {}));
-            const cls = rawBody ? classifyPreviewError(rawBody as any, rawBodyText) : {
-              outcome: (result.metadata?.classified as any)?.outcome || 'error',
-              code: (result.metadata?.classified as any)?.code || 500,
-              rawBody: getRawBody(result), serverMsg: result.error || 'unknown error',
-              rawServerMsg: rawBodyText || result.error || 'unknown error',
-              responsibility: { subject: '智谱/网络', target: '插件', cause: '未知服务端错误' },
-            };
+            const cls = (result.metadata?.classified as ClassifiedShotResult | undefined)
+              ?? (rawBody
+                ? classifyPreviewError(rawBody as any, rawBodyText)
+                : classifyPreviewNetworkError(result.error || 'unknown error'));
             postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ' + cls.outcome + ' (' + rtt + 'ms)' });
             postToOverlay({
               type: 'FIRE_SHOT_RESULT',
@@ -1199,7 +1102,7 @@ export default defineContentScript({
           }
         } catch (e: any) {
           if (e?.name === 'AbortError' || cancelled) return 'cancelled';
-          const cls = neterrResponsibility(e?.message || 'unknown');
+          const cls = classifyPreviewNetworkError(e);
           postToOverlay({ type: 'FIRE_RESULT', line: tag + ': net-err: ' + cls.rawServerMsg });
           postToOverlay({
             type: 'FIRE_SHOT_RESULT',
@@ -1261,7 +1164,7 @@ export default defineContentScript({
           if (!shot) return { outcome: 'error' as const };
           const outcome = await fireOne(shot, requestSeq, { requestId, onFetchStarted, setAbort });
           postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${requestSeq + 1}/${total})` });
-          return { outcome: (['success', 'busy', 'soldout', 'neterr', 'cancelled'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'cancelled' };
+          return { outcome: (['success', 'busy', 'soldout', 'neterr', 'waf', 'cancelled'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled' };
         },
       });
       currentFireRunner = runner;
