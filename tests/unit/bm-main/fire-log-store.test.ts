@@ -117,6 +117,54 @@ describe('Fire Log V2 store', () => {
     expect(two.sequence).toBe((one.sequence as number) + 1);
   });
 
+  it('preserves fields across incremental successful writes with the same keys', async () => {
+    const store = makeStore(dbName);
+    await store.writeSession({ sessionId: 's-1', initial: 'session' });
+    await store.writeSession({ sessionId: 's-1', updated: 'session' });
+    await store.writeRun({ runId: 'r-1', sessionId: 's-1', initial: 'run' });
+    await store.writeRun({ runId: 'r-1', sessionId: 's-1', updated: 'run' });
+    await store.writeShot({ shotId: 'sh-1', sessionId: 's-1', initial: 'shot' });
+    await store.writeShot({ shotId: 'sh-1', sessionId: 's-1', updated: 'shot' });
+
+    expect(await store.exportLog('s-1')).toMatchObject({
+      session: { initial: 'session', updated: 'session' },
+      runs: [{ initial: 'run', updated: 'run' }],
+      shots: [{ initial: 'shot', updated: 'shot' }],
+    });
+  });
+
+  it('keeps a record in fallback when a write request succeeds but its transaction aborts', async () => {
+    const abortingIdb = {
+      open(name: string, version?: number) {
+        const request = idbFactory.open(name, version);
+        request.addEventListener('success', () => {
+          const db = request.result;
+          const transaction = db.transaction.bind(db);
+          db.transaction = ((storeName: string, mode?: IDBTransactionMode) => {
+            const tx = transaction(storeName, mode);
+            if (storeName !== 'shots' || mode !== 'readwrite') return tx;
+            const objectStore = tx.objectStore.bind(tx);
+            tx.objectStore = ((name: string) => {
+              const store = objectStore(name);
+              const put = store.put.bind(store);
+              store.put = ((record: Record<string, unknown>) => {
+                const write = put(record);
+                write.addEventListener('success', () => tx.abort());
+                return write;
+              }) as typeof store.put;
+              return store;
+            }) as typeof tx.objectStore;
+            return tx;
+          }) as typeof db.transaction;
+        });
+        return request;
+      },
+    };
+    const store = makeStore(dbName, { indexedDB: abortingIdb });
+    await expect(store.writeShot({ shotId: 'sh-abort', sessionId: 's-1' })).resolves.toMatchObject({ shotId: 'sh-abort' });
+    expect(await store.exportLog('s-1')).toMatchObject({ shots: [{ shotId: 'sh-abort' }] });
+  });
+
   it('omits sensitive headers recursively while preserving bodies', async () => {
     const store = makeStore(dbName);
     await store.writeShot({
@@ -208,5 +256,32 @@ describe('Fire Log V2 store', () => {
     expect(log.textContent).toContain(warning);
     expect(log.textContent!.split(warning)).toHaveLength(2);
     document.body.innerHTML = '';
+  });
+
+  it('preserves legacy shot code as V2 httpStatus after higher-priority status fields', async () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+      postMessage: () => {},
+    };
+    const scope = vm.createContext({
+      window, _NS: 'status-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      document: { visibilityState: 'visible' },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 }, setTimeout: () => 0,
+      postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 0, productId: 'p-1', code: 555 } } });
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 1, productId: 'p-2', code: 555, httpCode: 503 } } });
+    listeners[0]({ data: { __overlay: true, type: 'FIRE_SHOT_RESULT', data: { shotIdx: 2, productId: 'p-3', code: 555, httpCode: 503, httpStatus: 201 } } });
+    await Promise.resolve();
+    await Promise.resolve();
+    const store = (window.__fireLogV2Store as FireLogStore);
+    expect((await store.readAll()).shots.map((shot) => shot.httpStatus)).toEqual([555, 503, 201]);
   });
 });

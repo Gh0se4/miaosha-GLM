@@ -79,11 +79,17 @@ function createFireLogStore(options) {
     if (store === 'events') {
       var eventRecord = _fireLogV2Sanitize(record, false);
       if (eventRecord.sequence == null) eventRecord.sequence = ++fallbackEventSequence;
+      for (var i = 0; i < fallback.events.length; i++) {
+        if (fallback.events[i].sequence === eventRecord.sequence) {
+          fallback.events[i] = mergeValues(fallback.events[i], eventRecord);
+          return fallback.events[i];
+        }
+      }
       fallback.events.push(eventRecord);
       return eventRecord;
     }
     var key = keyFor(store, record);
-    if (key != null) fallback[store][key] = _fireLogV2Sanitize(record, false);
+    if (key != null) fallback[store][key] = mergeValues(fallback[store][key], _fireLogV2Sanitize(record, false));
     return fallback[store][key] || _fireLogV2Sanitize(record, false);
   }
 
@@ -94,15 +100,39 @@ function createFireLogStore(options) {
       return new Promise(function(resolve) {
         var transaction;
         try { transaction = db.transaction(store, 'readwrite'); } catch (error) { warn(error); resolve(remember(store, clean)); return; }
-        var request;
-        try { request = store === 'events' ? transaction.objectStore(store).add(clean) : transaction.objectStore(store).put(clean); }
-        catch (error) { warn(error); resolve(remember(store, clean)); return; }
-        request.onsuccess = function() {
-          if (store === 'events') clean.sequence = request.result;
-          resolve(clean);
-        };
-        request.onerror = function() { warn(request.error || new Error('IndexedDB write failed')); resolve(remember(store, clean)); };
-        transaction.onabort = function() { warn(transaction.error || new Error('IndexedDB transaction aborted')); };
+        var settled = false;
+        var written = clean;
+        function fallbackWrite(error) {
+          if (settled) return;
+          settled = true;
+          warn(error || new Error('IndexedDB transaction failed'));
+          resolve(remember(store, clean));
+        }
+        function completeWrite() {
+          if (settled) return;
+          settled = true;
+          resolve(written);
+        }
+        transaction.oncomplete = completeWrite;
+        transaction.onabort = function() { fallbackWrite(transaction.error || new Error('IndexedDB transaction aborted')); };
+        transaction.onerror = function() { fallbackWrite(transaction.error || new Error('IndexedDB transaction failed')); };
+        function put(record) {
+          var request;
+          try { request = transaction.objectStore(store).put(record); } catch (error) { fallbackWrite(error); return; }
+          request.onsuccess = function() { written = record; };
+          request.onerror = function() { fallbackWrite(request.error || new Error('IndexedDB write failed')); };
+        }
+        if (store === 'events') {
+          var eventRequest;
+          try { eventRequest = transaction.objectStore(store).add(clean); } catch (error) { fallbackWrite(error); return; }
+          eventRequest.onsuccess = function() { clean.sequence = eventRequest.result; written = clean; };
+          eventRequest.onerror = function() { fallbackWrite(eventRequest.error || new Error('IndexedDB write failed')); };
+        } else {
+          var getRequest;
+          try { getRequest = transaction.objectStore(store).get(keyFor(store, clean)); } catch (error) { fallbackWrite(error); return; }
+          getRequest.onsuccess = function() { put(mergeValues(getRequest.result, clean)); };
+          getRequest.onerror = function() { fallbackWrite(getRequest.error || new Error('IndexedDB read before write failed')); };
+        }
       });
     }).catch(function(error) { warn(error); return remember(store, clean); });
   }
@@ -113,9 +143,20 @@ function createFireLogStore(options) {
       return new Promise(function(resolve) {
         var transaction;
         try { transaction = db.transaction(store, 'readonly'); } catch (error) { warn(error); resolve([]); return; }
+        var settled = false;
+        var records = [];
+        function finish(value, error) {
+          if (settled) return;
+          settled = true;
+          if (error) warn(error);
+          resolve(value);
+        }
+        transaction.oncomplete = function() { finish(records); };
+        transaction.onabort = function() { finish([], transaction.error || new Error('IndexedDB read transaction aborted')); };
+        transaction.onerror = function() { finish([], transaction.error || new Error('IndexedDB read transaction failed')); };
         var request = transaction.objectStore(store).getAll();
-        request.onsuccess = function() { resolve(request.result || []); };
-        request.onerror = function() { warn(request.error || new Error('IndexedDB read failed')); resolve([]); };
+        request.onsuccess = function() { records = request.result || []; };
+        request.onerror = function() { finish([], request.error || new Error('IndexedDB read failed')); };
       });
     }).catch(function(error) { warn(error); return []; });
   }

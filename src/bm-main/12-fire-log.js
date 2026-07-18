@@ -195,7 +195,7 @@ var _log_v2PersistenceWarningShown = false;
         serverMsg: shot.serverMsg || '',
         rawServerMsg: shot.rawServerMsg || '',
         rawBody: shot.rawBody || shot.rawServerMsg || shot.serverMsg || '',
-        httpStatus: shot.httpCode || 0,
+        httpStatus: shot.httpStatus || shot.httpCode || shot.code || 0,
         rttMs: shot.rtt || 0,
         responsibility: shot.responsibility || null,
         bizId: shot.bizId || null,
