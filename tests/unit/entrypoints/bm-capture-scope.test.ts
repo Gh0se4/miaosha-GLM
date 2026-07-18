@@ -477,4 +477,35 @@ describe('bm-capture.content.ts scope regression', () => {
       }),
     }));
   });
+
+  it('records prepare start and all auto target timing components in the V2 run', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', {
+      targetMs: 10_000, fireStartMs: 9_100, preparationLeadMs: 3_000,
+      rttCompensationMs: 700, clockOffsetMs: 200, earlyOffsetMs: 10,
+    });
+
+    const prepare = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    const run = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_RUN' && message.data?.mode === 'auto');
+    expect(prepare?.data).toMatchObject({ runId: expect.any(String), wallClockMs: expect.any(Number), monotonicMs: expect.any(Number) });
+    expect(run?.data).toMatchObject({
+      nextSaleTime: 10_000, targetMs: 10_000, startMs: 9_100, preparationLeadMs: 3_000,
+      rttCompensationMs: 700, clockOffsetMs: 200, earlyOffsetMs: 10,
+    });
+  });
+
+  it('records a timed-out started request as a V2 timeout shot', async () => {
+    const harness = createContentHarness({ orderResult: Promise.resolve({
+      success: false,
+      metadata: { transportFailure: 'timeout', classified: { outcome: 'neterr', code: 0, serverMsg: 'timeout', rawServerMsg: 'timeout' } },
+    }) });
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+
+    expect(harness.posted).toContainEqual(expect.objectContaining({
+      type: 'FIRE_LOG_V2_EVENT',
+      data: expect.objectContaining({ type: 'fetch_timed_out', shotId: 'shot-0', shot: expect.objectContaining({ outcome: 'timed_out' }) }),
+    }));
+  });
 });

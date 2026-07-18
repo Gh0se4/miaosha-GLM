@@ -605,10 +605,12 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
       if (timeout !== undefined) clearTimeout(timeout);
       fn();
     };
-    const abort = () => {
+    const abort = (reason: 'aborted' | 'timeout' = 'aborted') => {
       if (settled) return;
       window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH_CANCEL', requestId }, '*');
-      finish(() => reject(new Error('MAIN world fetch aborted')));
+      const error = new Error(reason === 'timeout' ? 'MAIN world fetch timeout' : 'MAIN world fetch aborted');
+      error.name = reason === 'timeout' ? 'TimeoutError' : 'AbortError';
+      finish(() => reject(error));
     };
     opts.onAbortReady?.(abort);
     function handler(ev: MessageEvent) {
@@ -638,7 +640,7 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
     window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', requestId, runId: opts.runId, shotId: opts.shotId, opts }, '*');
     timeout = setTimeout(() => {
       if (settled) return;
-      abort();
+      abort('timeout');
     }, 8000);
   });
 }
@@ -928,15 +930,18 @@ export default defineContentScript({
       fireStartMs: number,
       authArg: any,
       preparationCancellation?: FirePreparationCancellation,
+      runId?: string,
+      autoTiming?: AutoTimingMetadata,
     ) {
       // Auto mode uses the same explicit runner lifecycle as manual mode.
       if (preparationCancellation?.cancelled) return;
       await prepareAndRun({
-        runId: `auto-${fireStartMs}-${Date.now()}`,
+        runId: runId || `auto-${fireStartMs}-${Date.now()}`,
         mode: 'auto',
         startMs: fireStartMs,
         authArg,
         preparationCancellation,
+        autoTiming,
       });
     }
 
@@ -955,6 +960,15 @@ export default defineContentScript({
       enableBusyBackoff: boolean;
       pollPayment: boolean;
       preparationCancellation?: FirePreparationCancellation;
+      autoTiming?: AutoTimingMetadata;
+    }
+
+    interface AutoTimingMetadata {
+      targetMs: number;
+      preparationLeadMs: number;
+      rttCompensationMs: number;
+      clockOffsetMs: number;
+      earlyOffsetMs: number;
     }
 
     async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
@@ -1041,6 +1055,14 @@ export default defineContentScript({
           tickets: plan.shots.map((shot) => ({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt })),
           calibration: calibrationSnapshot,
           auth: { source: auth.metadata?.source || 'unknown', ageMs: Math.max(0, Date.now() - authCapturedAt) },
+          ...(options.mode === 'auto' && options.autoTiming ? {
+            nextSaleTime: options.autoTiming.targetMs,
+            targetMs: options.autoTiming.targetMs,
+            preparationLeadMs: options.autoTiming.preparationLeadMs,
+            rttCompensationMs: options.autoTiming.rttCompensationMs,
+            clockOffsetMs: options.autoTiming.clockOffsetMs,
+            earlyOffsetMs: options.autoTiming.earlyOffsetMs,
+          } : {}),
         },
       });
       postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: 'run_prepared', runId, preparedAt: Date.now() } });
@@ -1138,6 +1160,27 @@ export default defineContentScript({
           if (cancelled) {
             persistCancelledStartedShot(result);
             return 'cancelled';
+          }
+          if (result.metadata?.transportFailure === 'timeout') {
+            const timeoutShot = buildShotLog(shot, idx, 'timed_out', Date.now() - t1, t1, result, {
+              code: 0,
+              request: {
+                method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview',
+                headers: {
+                  Authorization: normalizeAuthHeaders(auth)?.authorization || '',
+                  'Bigmodel-Organization': normalizeAuthHeaders(auth)?.bigmodelOrganization || '',
+                  'Bigmodel-Project': normalizeAuthHeaders(auth)?.bigmodelProject || '',
+                },
+                body: JSON.stringify({ productId: shot.productId, ticket: shot.ticket, randstr: shot.randstr || '' }),
+              },
+              timing: fetchTiming,
+              timeout: { timeoutMs: 8000, timedOutAt: Date.now() },
+            });
+            postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
+              type: 'fetch_timed_out', runId, shotId: `shot-${idx}`, requestSeq: idx,
+              plannedAt: timeoutShot.plannedAt, timing: timeoutShot.timing, shot: timeoutShot,
+            } });
+            return 'neterr';
           }
           const rtt = Date.now() - t1;
 
@@ -1299,6 +1342,7 @@ export default defineContentScript({
       startMs: number;
       authArg?: any;
       preparationCancellation?: FirePreparationCancellation;
+      autoTiming?: AutoTimingMetadata;
     }) {
       const mode = input.mode;
       const label = mode === 'burst' ? 'BURST' : mode === 'auto' ? 'Auto' : 'Strike';
@@ -1310,6 +1354,7 @@ export default defineContentScript({
         enableBusyBackoff: mode === 'manual',
         pollPayment: true,
         preparationCancellation: input.preparationCancellation,
+        autoTiming: input.autoTiming,
       });
     }
 
@@ -1335,6 +1380,8 @@ export default defineContentScript({
       startMs: number,
       reason: string,
       preparationCancellation?: FirePreparationCancellation,
+      runId?: string,
+      autoTiming?: AutoTimingMetadata,
     ) {
       const reportPrefireCancelled = () => {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
@@ -1386,7 +1433,7 @@ export default defineContentScript({
       }
 
       if (reason === 'auto') {
-        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation);
+        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation, runId, autoTiming);
         return;
       }
 
@@ -1417,14 +1464,28 @@ export default defineContentScript({
           prefireAndBurst(startMs, reason);
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
-          const fireStartMs: number = event.data.data?.fireStartMs ?? event.data.data?.startMs ?? Date.now();
+          const prefireData = event.data.data || {};
+          const fireStartMs: number = prefireData.fireStartMs ?? prefireData.startMs ?? Date.now();
           if (currentFirePreparationCancellation || preparingFireRun || currentFireRunner) {
             postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
             return;
           }
           const preparationCancellation = createFirePreparationCancellation();
           currentFirePreparationCancellation = preparationCancellation;
-          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation);
+          const runId = `auto-${fireStartMs}-${Date.now()}`;
+          const autoTiming: AutoTimingMetadata = {
+            targetMs: Number(prefireData.targetMs ?? fireStartMs),
+            preparationLeadMs: Number(prefireData.preparationLeadMs ?? 3000),
+            rttCompensationMs: Number(prefireData.rttCompensationMs ?? 0),
+            clockOffsetMs: Number(prefireData.clockOffsetMs ?? 0),
+            earlyOffsetMs: Number(prefireData.earlyOffsetMs ?? 0),
+          };
+          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
+            type: 'run_prepare_started', runId, wallClockMs: Date.now(),
+            monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
+            details: { mode: 'auto', startMs: fireStartMs, ...autoTiming },
+          } });
+          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation, runId, autoTiming);
         }
         if (event.data.type === 'CANCEL_FIRE') {
           currentFirePreparationCancellation?.cancel();

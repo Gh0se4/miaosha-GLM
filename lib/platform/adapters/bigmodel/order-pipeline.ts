@@ -225,6 +225,7 @@ export class BigmodelOrderPipeline implements IOrderPipeline {
         error: classified.rawServerMsg,
         metadata: {
           classified,
+          transportFailure: e?.name === 'TimeoutError' ? 'timeout' : undefined,
           statusText: e?.statusText || e?.message || 'network error',
           message: classified.rawServerMsg,
         },
