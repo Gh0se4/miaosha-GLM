@@ -1184,12 +1184,16 @@ export default defineContentScript({
           setTimeout(async () => {
             const outcome = await fireOne(shot, idx);
             postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${shotIdx}/${total})` });
+            if (outcome === 'error') {
+              cancelAll();
+              postToOverlay({ type: 'FIRE_RESULT', line: '> ⛔ WAF/error — stopping to avoid waste' });
+              postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: shotIdx } });
+              return;
+            }
             scheduleNext();
           }, delay),
         );
       };
-
-      scheduleNext();
 
       scheduleNext();
     }
