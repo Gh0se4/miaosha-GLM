@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
 import * as vm from 'vm';
+import { IDBFactory } from 'fake-indexeddb';
 
 const SOURCE_PATH = path.resolve(__dirname, '../../../entrypoints/bm-capture.content.ts');
 
@@ -12,12 +13,59 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createMainLogExportHarness() {
+  const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+  const window: Record<string, unknown> = {
+    addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+    postMessage: () => undefined,
+  };
+  const scope = vm.createContext({
+    window,
+    _NS: 'content-export-',
+    MSG_OVL: '__overlay',
+    indexedDB: new IDBFactory(),
+    document: { visibilityState: 'visible', addEventListener: () => undefined },
+    sessionStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
+    navigator: { userAgent: 'test-agent' },
+    location: { href: 'https://example.test/glm-coding' },
+    Intl,
+    Date,
+    Math,
+    Promise,
+    performance: { now: () => 1 },
+    setTimeout: () => 0,
+    postToOverlay: () => undefined,
+  });
+  for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+  }
+
+  return {
+    ingest(messages: Array<Record<string, unknown>>) {
+      for (const message of messages) {
+        if (!['FIRE_LOG_V2_RUN', 'FIRE_LOG_V2_EVENT', 'FIRE_SHOT_RESULT'].includes(String(message.type))) continue;
+        for (const listener of listeners) {
+          listener({ data: { __overlay: true, ...message } });
+        }
+      }
+    },
+    async exportLog() {
+      await Promise.resolve();
+      await Promise.resolve();
+      return (window.__fireLogV2Store as { exportLog(sessionId: string): Promise<Record<string, unknown>> }).exportLog('');
+    },
+  };
+}
+
 function createContentHarness(options: {
   capture?: Promise<any>;
   paymentStateFails?: boolean;
   orderResult?: any;
   nextSaleTime?: number;
   runtimeCalibration?: any;
+  shots?: Array<Record<string, unknown>>;
+  orderResults?: any[];
+  burstIntervalMs?: number;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -25,6 +73,7 @@ function createContentHarness(options: {
   let pollCalls = 0;
   let runnerCount = 0;
   let calibrationCalls = 0;
+  let orderResultIndex = 0;
   let nextSaleTime = options.nextSaleTime ?? Date.now() + 60 * 60 * 1000;
   const auth = {
     platform: 'bigmodel',
@@ -70,7 +119,11 @@ function createContentHarness(options: {
                 teste: true,
                 type: 'TICKET_STORE_DATA',
                 reqId: message.reqId,
-                list: [{ ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now() }],
+                list: (options.shots ?? [{ ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 }]).map((shot) => ({
+                  ticket: shot.ticket,
+                  randstr: shot.randstr,
+                  createdAt: shot.createdAt,
+                })),
               },
             });
           }
@@ -107,17 +160,20 @@ function createContentHarness(options: {
         async run() {
           this.input.onEvent({ type: 'tickets_reserved', payload: {} });
           runnerEvents.push('tickets_reserved');
-          const slot = this.input.slots[0];
-          this.input.onEvent({ type: 'shot_released', payload: { runId: this.input.runId, shotId: slot.shotId, requestSeq: slot.requestSeq, plannedAt: slot.plannedAt, scheduledAt: 123, releasedAt: 123 } });
-          const result = await this.input.executeShot({
-            shotId: slot.shotId,
-            requestSeq: slot.requestSeq,
-            requestId: 'request-1',
-            onFetchStarted: () => undefined,
-            setAbort: () => undefined,
-          });
-          runnerEvents.push(result.outcome);
-          return { accepted: true, reason: result.outcome === 'success' ? 'success' : 'complete' };
+          let outcome = 'complete';
+          for (const slot of this.input.slots) {
+            this.input.onEvent({ type: 'shot_released', payload: { runId: this.input.runId, shotId: slot.shotId, requestSeq: slot.requestSeq, plannedAt: slot.plannedAt, scheduledAt: 123, releasedAt: 123 } });
+            const result = await this.input.executeShot({
+              shotId: slot.shotId,
+              requestSeq: slot.requestSeq,
+              requestId: `request-${slot.requestSeq + 1}`,
+              onFetchStarted: () => undefined,
+              setAbort: () => undefined,
+            });
+            runnerEvents.push(result.outcome);
+            if (result.outcome === 'success') outcome = 'success';
+          }
+          return { accepted: true, reason: outcome };
         }
       },
     };
@@ -125,9 +181,9 @@ function createContentHarness(options: {
       buildFireSchedule: (input: any) => ({ ...input, slots: input.shots.map((shot: any, index: number) => ({ ...shot, requestSeq: index, plannedAt: input.startMs + index * input.intervalMs })) }),
     };
     if (id.includes('strike-plan')) return {
-      buildStrikeQueue: ({ tickets, targets }: any) => ({ shots: [{ ...tickets[0], productId: targets[0].productId, priority: targets[0].priority }] }),
+      buildStrikeQueue: ({ tickets, targets }: any) => ({ shots: options.shots ?? [{ ...tickets[0], productId: targets[0].productId, priority: targets[0].priority }] }),
     };
-    if (id.includes('settings/fire')) return { fireStore: { get: async () => ({ payType: 'ALI', burstIntervalMs: 2100 }), set: async () => undefined }, FIRE_CONFIG_DEFAULT: { payType: 'ALI', burstIntervalMs: 2100 } };
+    if (id.includes('settings/fire')) return { fireStore: { get: async () => ({ payType: 'ALI', burstIntervalMs: options.burstIntervalMs ?? 2100 }), set: async () => undefined }, FIRE_CONFIG_DEFAULT: { payType: 'ALI', burstIntervalMs: 2100 } };
     if (id.includes('settings/sale-time')) return { SALE_ALARM_MINUTES: [], SALE_TIME_DEFAULT: {}, getNextSaleTime: () => nextSaleTime, saleTimeStore: { get: async () => ({}) } };
     if (id.includes('settings/captcha')) return { captchaStore: { get: async () => ({ batchSessionLimit: 100 }) } };
     if (id.includes('platform/adapters/bigmodel/request')) return {
@@ -139,12 +195,13 @@ function createContentHarness(options: {
       bigmodelAdapter: {
         authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
         orderPipeline: { run: async (_ctx: any, _auth: any, fireRequest: any) => {
-          const resultTiming = options.orderResult?.metadata?.transport?.timing;
+          const orderResult = options.orderResults?.[orderResultIndex++] ?? options.orderResult;
+          const resultTiming = orderResult?.metadata?.transport?.timing;
           fireRequest?.onFetchStarted?.({
             requestId: fireRequest.requestId,
             timing: resultTiming ?? { bridgeReceivedAt: 1, bridgeReceivedPerfMs: 1, fetchCalledAt: 2, fetchCalledPerfMs: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
           });
-          return await (options.orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }));
+          return await (orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }));
         } },
       },
     };
@@ -480,6 +537,73 @@ describe('bm-capture.content.ts scope regression', () => {
       responseBodyMs: 5,
       transportTotalMs: 19,
     });
+  });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 960, reason: 'manual' }],
+    ['auto', 'PREFIRE_PREPARE', { fireStartMs: 960 }],
+  ])('exports %s second-shot queue delay from the previous actual fetch anchor', async (_mode, command, data) => {
+    const busyAt = (fetchCalledAt: number) => ({
+      success: false,
+      error: 'busy',
+      metadata: {
+        classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' },
+        transport: {
+          status: 555,
+          timing: {
+            bridgeReceivedAt: fetchCalledAt - 1,
+            fetchCalledAt,
+            responseHeadersAt: fetchCalledAt + 1,
+            bodyCompletedAt: fetchCalledAt + 2,
+          },
+        },
+      },
+    });
+    const content = createContentHarness({
+      burstIntervalMs: 50,
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+      ],
+      orderResults: [busyAt(1_005), busyAt(1_060)],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
+    const second = report.shots.find((shot) => shot.shotId === 'shot-1');
+    expect(second).toMatchObject({
+      plannedAt: 1_010,
+      timing: { fetchCalledAt: 1_060 },
+      queueDelayMs: 5,
+    });
+  });
+
+  it('exports delayed burst shots without a queue-delay metric', async () => {
+    const content = createContentHarness({
+      burstIntervalMs: 50,
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+      ],
+      orderResults: [
+        { success: false, error: 'busy', metadata: { classified: { outcome: 'busy', code: 555 }, transport: { status: 555, timing: { bridgeReceivedAt: 1_004, fetchCalledAt: 1_005 } } } },
+        { success: false, error: 'busy', metadata: { classified: { outcome: 'busy', code: 555 }, transport: { status: 555, timing: { bridgeReceivedAt: 1_059, fetchCalledAt: 1_060 } } } },
+      ],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
+    const delayedSecond = report.shots.find((shot) => shot.shotId === 'shot-1');
+    expect(delayedSecond).toMatchObject({ mode: 'burst', plannedAt: 1_500, timing: { fetchCalledAt: 1_060 } });
+    expect(delayedSecond).not.toHaveProperty('queueDelayMs');
   });
 
   it('persists a cancelled result after the MAIN fetch has already started', async () => {

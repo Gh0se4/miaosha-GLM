@@ -299,7 +299,8 @@ var _log_initialVisibilityState = '';
       };
       _log_entries.push(entry);
       saveLog();
-      if (_log_v2Store) _log_v2Store.writeShot({
+      if (_log_v2Store) {
+        var v2Shot = {
         shotId: shot.shotId || ('legacy-' + _log_waveCount + '-' + _log_shotSeq),
         sessionId: _log_sessionId,
         runId: shot.runId,
@@ -325,14 +326,18 @@ var _log_initialVisibilityState = '';
         rttMs: entry.rttMs,
         timing: shot.timing,
         scheduleErrorMs: shot.scheduleErrorMs,
-        queueDelayMs: shot.queueDelayMs,
         bridgeWaitMs: shot.bridgeWaitMs,
         fetchToHeadersMs: shot.fetchToHeadersMs,
         responseBodyMs: shot.responseBodyMs,
         transportTotalMs: shot.transportTotalMs,
         responseBody: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
         rawServerMessage: entry.rawServerMsg
-      });
+        };
+        // Burst shots intentionally have no serialized queue-delay metric:
+        // they are allowed to overlap, so there is no serial queue anchor.
+        if (shot.queueDelayMs !== undefined) v2Shot.queueDelayMs = shot.queueDelayMs;
+        _log_v2Store.writeShot(v2Shot);
+      }
 
       // Build log line
       var tag = '>[#' + entry.shotIdx + '/' + (entry.wave) + '][P' + entry.priority + ']';
