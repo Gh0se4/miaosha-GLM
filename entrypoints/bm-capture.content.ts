@@ -938,6 +938,7 @@ export default defineContentScript({
       await prepareAndRun({
         runId: runId || `auto-${fireStartMs}-${Date.now()}`,
         mode: 'auto',
+        triggerSource: 'auto',
         startMs: fireStartMs,
         authArg,
         preparationCancellation,
@@ -955,6 +956,7 @@ export default defineContentScript({
     interface StrikeSequenceOptions {
       label: string;
       mode: 'manual' | 'burst' | 'auto';
+      triggerSource: 'manual' | 'burst' | 'auto';
       runId?: string;
       burstIntervalMs?: number;
       enableBusyBackoff: boolean;
@@ -1054,12 +1056,15 @@ export default defineContentScript({
         data: {
           runId,
           mode: options.mode,
+          triggerSource: options.triggerSource,
           targetAt: startMs,
           preparationStartedAt,
           preparedAt: Date.now(),
           startMs,
           intervalMs,
           maxInFlight,
+          ticketReturnCount: 0,
+          ticketsReturned: 0,
           products: targets.map((target) => ({ productId: target.productId, priority: target.priority })),
           tickets: plan.shots.map((shot) => ({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt })),
           calibration: calibrationSnapshot,
@@ -1106,6 +1111,8 @@ export default defineContentScript({
       };
 
       const total = plan.shots.length;
+      let ticketReturnCount = 0;
+      const returnedShotIds = new Set<string>();
       const releasedAtByShot = new Map<string, number>();
       const fetchCalledAtByShot = new Map<string, number>();
       const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
@@ -1327,7 +1334,17 @@ export default defineContentScript({
             const releasedAt = Number(event.payload.releasedAt ?? event.payload.scheduledAt);
             if (Number.isFinite(releasedAt)) releasedAtByShot.set(event.payload.shotId, releasedAt);
           }
-          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: event.type, ...event.payload } });
+          if (event.type === 'tickets_returned') {
+            for (const shotId of (event.payload.shotIds as string[]) || []) {
+              if (shotsById.has(shotId)) returnedShotIds.add(shotId);
+            }
+            ticketReturnCount = returnedShotIds.size;
+          }
+          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
+            type: event.type,
+            ...event.payload,
+            ...(event.type === 'tickets_returned' ? { ticketReturnCount } : {}),
+          } });
           if (event.type === 'tickets_reserved') {
             const reservedKeys = new Set(plan.shots.map((shot) => shot.ticket + ':' + shot.randstr + ':' + shot.createdAt));
             _ticketPool = _ticketPool.filter((ticket: any) => !reservedKeys.has(ticket.ticket + ':' + ticket.randstr + ':' + ticket.createdAt));
@@ -1344,6 +1361,11 @@ export default defineContentScript({
             writePageTicketStore();
             void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
             postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — returned unused tickets' });
+            postToOverlay({ type: 'FIRE_LOG_V2_RUN', data: {
+              runId,
+              ticketReturnCount,
+              ticketsReturned: ticketReturnCount,
+            } });
           }
         },
         executeShot: async ({ shotId, requestSeq, requestId, onFetchStarted, setAbort }) => {
@@ -1384,6 +1406,7 @@ export default defineContentScript({
       authArg?: any;
       preparationCancellation?: FirePreparationCancellation;
       autoTiming?: AutoTimingMetadata;
+      triggerSource?: 'manual' | 'burst' | 'auto';
     }) {
       const mode = input.mode;
       const label = mode === 'burst' ? 'BURST' : mode === 'auto' ? 'Auto' : 'Strike';
@@ -1391,6 +1414,7 @@ export default defineContentScript({
         runId: input.runId,
         label,
         mode,
+        triggerSource: input.triggerSource ?? mode,
         burstIntervalMs: mode === 'burst' ? 500 : undefined,
         enableBusyBackoff: mode === 'manual',
         pollPayment: true,
@@ -1405,7 +1429,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', startMs, authArg: auth });
+      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', triggerSource: 'manual', startMs, authArg: auth });
     }
 
     async function burstStrike(startMs: number, authOverride?: any) {
@@ -1414,7 +1438,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', startMs, authArg: auth });
+      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', triggerSource: 'burst', startMs, authArg: auth });
     }
 
     async function prefireAndBurst(

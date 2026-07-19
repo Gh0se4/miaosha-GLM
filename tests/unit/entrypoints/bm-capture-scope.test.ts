@@ -66,6 +66,7 @@ function createContentHarness(options: {
   shots?: Array<Record<string, unknown>>;
   orderResults?: any[];
   burstIntervalMs?: number;
+  returnedTicketCounts?: number[];
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -172,6 +173,25 @@ function createContentHarness(options: {
             });
             runnerEvents.push(result.outcome);
             if (result.outcome === 'success') outcome = 'success';
+          }
+          let returnedOffset = 0;
+          for (const count of options.returnedTicketCounts ?? []) {
+            const returnedSlots = this.input.slots.slice(returnedOffset, returnedOffset + count);
+            returnedOffset += count;
+            this.input.onEvent({
+              type: 'tickets_returned',
+              payload: {
+                runId: this.input.runId,
+                count: returnedSlots.length,
+                shotIds: returnedSlots.map((slot: any) => slot.shotId),
+                shots: returnedSlots.map((slot: any) => ({
+                  shotId: slot.shotId,
+                  requestSeq: slot.requestSeq,
+                  plannedAt: slot.plannedAt,
+                  terminalUnsentReason: 'cancelled',
+                })),
+              },
+            });
           }
           return { accepted: true, reason: outcome };
         }
@@ -604,6 +624,53 @@ describe('bm-capture.content.ts scope regression', () => {
     const delayedSecond = report.shots.find((shot) => shot.shotId === 'shot-1');
     expect(delayedSecond).toMatchObject({ mode: 'burst', plannedAt: 1_500, timing: { fetchCalledAt: 1_060 } });
     expect(delayedSecond).not.toHaveProperty('queueDelayMs');
+  });
+
+  it('exports the content run trigger source and cumulative returned-ticket count', async () => {
+    const content = createContentHarness({
+      returnedTicketCounts: [1, 2],
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+        { ticket: 'ticket-3', randstr: 'rand-3', createdAt: Date.now(), productId: 'product-3', priority: 3 },
+      ],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(content.posted).toContainEqual(expect.objectContaining({ type: 'FIRE_LOG_V2_RUN' }));
+    main.ingest(content.posted);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const report = await main.exportLog() as { runs: Array<Record<string, unknown>> };
+    expect(report.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        mode: 'manual',
+        triggerSource: 'manual',
+        ticketReturnCount: 3,
+        ticketsReturned: 3,
+      }),
+    ]));
+  });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' }],
+    ['burst', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' }],
+    ['auto', 'PREFIRE_PREPARE', { fireStartMs: 1_000 }],
+  ])('exports %s as its unambiguous trigger source', async (triggerSource, command, data) => {
+    const content = createContentHarness();
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    main.ingest(content.posted);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const report = await main.exportLog() as { runs: Array<Record<string, unknown>> };
+    expect(report.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ mode: triggerSource, triggerSource }),
+    ]));
   });
 
   it('persists a cancelled result after the MAIN fetch has already started', async () => {
