@@ -67,6 +67,8 @@ function createContentHarness(options: {
   orderResults?: any[];
   burstIntervalMs?: number;
   returnedTicketCounts?: number[];
+  now?: () => number;
+  onPreparationReady?: () => void;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -148,6 +150,7 @@ function createContentHarness(options: {
       runAfterFirePreparation: async ({ cancellation, preflight, onReady }: any) => {
         const value = await preflight();
         if (cancellation.cancelled) return 'cancelled';
+        options.onPreparationReady?.();
         await onReady(value);
         return 'ready';
       },
@@ -252,7 +255,7 @@ function createContentHarness(options: {
     document,
     chrome,
     console,
-    Date,
+    Date: options.now ? class extends Date { static now() { return options.now!(); } } : Date,
     Promise,
     Map,
     Set,
@@ -719,6 +722,30 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(run?.data).toMatchObject({
       nextSaleTime: 10_000, targetMs: 10_000, startMs: 9_100, preparationLeadMs: 3_000,
       rttCompensationMs: 700, clockOffsetMs: 200, earlyOffsetMs: 10,
+    });
+  });
+
+  it.each([
+    ['auto', 'PREFIRE_PREPARE', { targetMs: 10_000, fireStartMs: 9_100, preparationLeadMs: 3_000 }, 3_000],
+    ['manual', 'PREFIRE_FIRE', { startMs: 9_100, reason: 'manual' }, 0],
+    ['burst', 'PREFIRE_FIRE', { startMs: 9_100, reason: 'burst' }, 0],
+  ])('exports configured preparation timing for a %s run', async (_mode, command, data, preparationLeadMs) => {
+    let now = 1_000;
+    const harness = createContentHarness({
+      now: () => now,
+      onPreparationReady: () => { now = 1_250; },
+    });
+    await harness.start();
+    await harness.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const exporter = createMainLogExportHarness();
+    exporter.ingest(harness.posted);
+    const report = await exporter.exportLog();
+    const run = (report.runs as Array<Record<string, unknown>>).find((record) => record.mode === _mode);
+    expect(run).toMatchObject({
+      preparationLeadMs,
+      preparationDurationMs: 250,
     });
   });
 

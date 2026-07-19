@@ -1051,6 +1051,11 @@ export default defineContentScript({
       const maxInFlight = options.mode === 'burst' ? 2 : 1;
       const calibrationSnapshot = await safeGet<RuntimeCalibrationSnapshot>(RUNTIME_CALIBRATION_KEY).catch(() => null);
       const authCapturedAt = typeof auth.capturedAt === 'number' ? auth.capturedAt : Date.now();
+      // Preparation spans the work from entering this lifecycle through the
+      // point where its validated plan is ready to hand to FireRunner. It does
+      // not include waiting for the first scheduled shot or request execution.
+      const preparedAt = Date.now();
+      const preparationDurationMs = Math.max(0, preparedAt - preparationStartedAt);
       postToOverlay({
         type: 'FIRE_LOG_V2_RUN',
         data: {
@@ -1059,7 +1064,9 @@ export default defineContentScript({
           triggerSource: options.triggerSource,
           targetAt: startMs,
           preparationStartedAt,
-          preparedAt: Date.now(),
+          preparedAt,
+          preparationLeadMs: options.autoTiming?.preparationLeadMs ?? 0,
+          preparationDurationMs,
           startMs,
           intervalMs,
           maxInFlight,
@@ -1072,7 +1079,6 @@ export default defineContentScript({
           ...(options.mode === 'auto' && options.autoTiming ? {
             nextSaleTime: options.autoTiming.targetMs,
             targetMs: options.autoTiming.targetMs,
-            preparationLeadMs: options.autoTiming.preparationLeadMs,
             rttCompensationMs: options.autoTiming.rttCompensationMs,
             clockOffsetMs: options.autoTiming.clockOffsetMs,
             earlyOffsetMs: options.autoTiming.earlyOffsetMs,
