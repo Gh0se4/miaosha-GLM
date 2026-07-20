@@ -134,6 +134,7 @@ function _fv_buildHTML() {
     '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.5.0</span>',
     '<span id="' + _NS + 'fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
     '<span id="' + _NS + 'fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
+    '<button id="' + _NS + 'fv_stop" style="border:1px solid #fecaca;background:#fff1f2;color:#be123c;border-radius:4px;padding:2px 7px;cursor:pointer;font-size:9px;font-weight:800">停止</button>',
     '<button id="' + _NS + 'fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
       'border:1px solid #e2e8f0;',
@@ -195,7 +196,7 @@ function _fv_buildHTML() {
     '<span style="flex:1"></span>',
     '<button id="' + _NS + 'fv_cpy" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">COPY</button>',
     '<button id="' + _NS + 'fv_dwn" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">DOWN</button>',
-    '<button id="' + _NS + 'fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">JSON</button>',
+    '<button id="' + _NS + 'fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">完整日志json</button>',
     '<button id="' + _NS + 'fv_asc" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">AUTO ↓</button>',
     '<button id="' + _NS + 'fv_clr" style="font-size:8px;color:#64748b;border:1px solid #e2e8f0;background:#f8fafc;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">CLR</button>',
     '</div>',
@@ -269,6 +270,11 @@ function _fv_show(data) {
     _fv_persistenceWarningRendered = false;
 
     _fv_bindEvents();
+  }
+
+  if (!data) {
+    _fv_renderPersistenceWarning();
+    return;
   }
 
   var chainWrap = document.getElementById(_NS + 'fv_chain');
@@ -518,6 +524,11 @@ function _fv_clearLog() {
 }
 
 function _fv_bindEvents() {
+  var stop = document.getElementById(_NS + 'fv_stop');
+  if (stop) stop.addEventListener('click', function() {
+    window.postMessage({ [MSG_CMD]: true, type: 'CANCEL_FIRE' }, '*');
+  });
+
   var cls = document.getElementById(_NS + 'fv_cls');
   if (cls) cls.addEventListener('click', function() {
     var ov = document.getElementById(_NS + 'fv');
@@ -667,3 +678,7 @@ window.addEventListener('message', function(e) {
     if (cur3) { cur3.style.color = '#dc2626'; cur3.style.animation = ''; }
   }
 });
+
+// Keep the diagnostics available before a purchase starts.  A missing payload
+// creates only the idle panel; the first FIRE_BATCH_START still becomes Wave 1.
+if (document.body) _fv_show();

@@ -499,7 +499,7 @@ describe('Fire Log V2 store', () => {
       data: expect.objectContaining({ line: expect.stringContaining('日志仅临时保存在内存，刷新页面会丢失') }),
     }));
     await expect(((window as unknown as Record<string, unknown>).__fireLogDownload as () => Promise<Record<string, unknown>>)()).resolves.toMatchObject({ schemaVersion: 2 });
-    expect(document.body.textContent).not.toContain('日志仅临时保存在内存，刷新页面会丢失');
+    expect(document.body.textContent).toContain('日志仅临时保存在内存，刷新页面会丢失');
 
     (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 0, burstIntervalMs: 100 });
     expect(document.getElementById('test-fv_log')!.textContent).toContain('日志仅临时保存在内存，刷新页面会丢失');
@@ -518,7 +518,7 @@ describe('Fire Log V2 store', () => {
 
     const warning = '⚠ 日志仅临时保存在内存，刷新页面会丢失';
     listeners[0]({ data: { __overlay: true, type: 'FIRE_RESULT', data: { line: warning } } });
-    expect(document.body.textContent).not.toContain(warning);
+    expect(document.body.textContent).toContain(warning);
 
     (scope._fv_show as (data: Record<string, unknown>) => void)({ mode: 'manual', totalShots: 0, burstIntervalMs: 100 });
     listeners[0]({ data: { __overlay: true, type: 'FIRE_RESULT', data: { line: warning } } });
@@ -527,6 +527,57 @@ describe('Fire Log V2 store', () => {
     expect(log.textContent).toContain(warning);
     expect(log.textContent!.split(warning)).toHaveLength(2);
     document.body.innerHTML = '';
+  });
+
+  it('opens Fire Matrix by default and exposes stop plus complete-log controls', () => {
+    const posted: Array<Record<string, unknown>> = [];
+    const scope = vm.createContext({
+      window: {
+        addEventListener: () => undefined,
+        postMessage: (message: Record<string, unknown>) => posted.push(message),
+      },
+      _NS: 'default-panel-', MSG_OVL: '__overlay', MSG_CMD: '__command',
+      document, Date, Math, setTimeout: () => 0,
+      navigator: { clipboard: null },
+    });
+    document.body.innerHTML = '';
+    vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main/09-fire-viz.js'), 'utf8'), scope);
+
+    expect(document.getElementById('default-panel-fv')).not.toBeNull();
+    expect(document.getElementById('default-panel-fv_json')!.textContent).toBe('完整日志json');
+    (document.getElementById('default-panel-fv_stop') as HTMLButtonElement).click();
+    expect(posted).toContainEqual({ __command: true, type: 'CANCEL_FIRE' });
+    document.body.innerHTML = '';
+  });
+
+  it('retains same-index shots from separate runs when their IDs are run-scoped', async () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+    const window: Record<string, unknown> = {
+      addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+      postMessage: () => undefined,
+    };
+    const scope = vm.createContext({
+      window, _NS: 'identity-', MSG_OVL: '__overlay', indexedDB: idbFactory,
+      document: { visibilityState: 'visible' },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+      Intl, Date, Math, Promise, performance: { now: () => 1 }, setTimeout: () => 0,
+      postToOverlay: () => {},
+    });
+    for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+    }
+    for (const runId of ['manual-1', 'manual-2']) {
+      listeners[0]({ data: {
+        __overlay: true, type: 'FIRE_SHOT_RESULT',
+        data: { runId, shotId: `${runId}:shot-0`, shotIdx: 0, productId: 'product-1', outcome: 'busy', code: 555 },
+      } });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const shots = (await (window.__fireLogV2Store as FireLogStore).readAll()).shots;
+    expect(shots.map((shot) => shot.shotId).sort()).toEqual(['manual-1:shot-0', 'manual-2:shot-0']);
   });
 
   it('preserves legacy shot code as V2 httpStatus after higher-priority status fields', async () => {

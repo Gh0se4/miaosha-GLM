@@ -1121,6 +1121,7 @@ export default defineContentScript({
       const returnedShotIds = new Set<string>();
       const releasedAtByShot = new Map<string, number>();
       const fetchCalledAtByShot = new Map<string, number>();
+      const logShotId = (idx: number) => `${runId}:shot-${idx}`;
       const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
         const transport = result?.metadata?.transport || {};
         const timing = transport.timing || extra.timing;
@@ -1157,7 +1158,7 @@ export default defineContentScript({
           headers: transport.headers || {}, body: transport.body || '', status: transport.status, statusText: transport.statusText,
         };
         return {
-          runId, shotId: `shot-${idx}`, shotIdx: idx, productId: shot.productId, priority: shot.priority,
+          runId, shotId: logShotId(idx), shotIdx: idx, productId: shot.productId, priority: shot.priority,
           ticket: shot.ticket, randstr: shot.randstr, ticketMask: maskTicket(shot.ticket),
           requestSeq: idx, plannedAt, outcome, rtt, sentAt,
           releasedAt, mode: options.mode,
@@ -1190,7 +1191,7 @@ export default defineContentScript({
             cancel: { reason: 'user_cancelled_after_fetch_started', cancelledAt: Date.now() },
           });
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-            type: 'fetch_aborted', runId, shotId: `shot-${idx}`, requestSeq: idx,
+            type: 'fetch_aborted', runId, shotId: logShotId(idx), requestSeq: idx,
             plannedAt: cancelledShot.plannedAt, timing: cancelledShot.timing,
             shot: cancelledShot,
           } });
@@ -1203,7 +1204,7 @@ export default defineContentScript({
           }, auth, {
             requestId: fireRequest.requestId,
             runId,
-            shotId: `shot-${idx}`,
+            shotId: logShotId(idx),
             onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => {
               fetchTiming = timing;
               fetchCalledAtByShot.set(`shot-${idx}`, timing.fetchCalledAt);
@@ -1231,7 +1232,7 @@ export default defineContentScript({
               timeout: { timeoutMs: 8000, timedOutAt: Date.now() },
             });
             postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-              type: 'fetch_timed_out', runId, shotId: `shot-${idx}`, requestSeq: idx,
+              type: 'fetch_timed_out', runId, shotId: logShotId(idx), requestSeq: idx,
               plannedAt: timeoutShot.plannedAt, timing: timeoutShot.timing, shot: timeoutShot,
             } });
             return 'neterr';
@@ -1346,9 +1347,16 @@ export default defineContentScript({
             }
             ticketReturnCount = returnedShotIds.size;
           }
+          const logPayload = { ...event.payload };
+          if (typeof logPayload.shotId === 'string') logPayload.shotId = `${runId}:${logPayload.shotId}`;
+          if (Array.isArray(logPayload.shotIds)) logPayload.shotIds = logPayload.shotIds.map((shotId: string) => `${runId}:${shotId}`);
+          if (Array.isArray(logPayload.shots)) logPayload.shots = logPayload.shots.map((shot: any) => ({
+            ...shot,
+            ...(typeof shot?.shotId === 'string' ? { shotId: `${runId}:${shot.shotId}` } : {}),
+          }));
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
             type: event.type,
-            ...event.payload,
+            ...logPayload,
             ...(event.type === 'tickets_returned' ? { ticketReturnCount } : {}),
           } });
           if (event.type === 'tickets_reserved') {

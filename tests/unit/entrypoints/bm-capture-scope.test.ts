@@ -593,11 +593,11 @@ describe('bm-capture.content.ts scope regression', () => {
     const main = createMainLogExportHarness();
     await content.start();
     await content.command(command, data);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 20));
     main.ingest(content.posted);
 
     const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
-    const second = report.shots.find((shot) => shot.shotId === 'shot-1');
+    const second = report.shots.find((shot) => String(shot.shotId).endsWith(':shot-1'));
     expect(second).toMatchObject({
       plannedAt: 1_010,
       timing: { fetchCalledAt: 1_060 },
@@ -624,9 +624,38 @@ describe('bm-capture.content.ts scope regression', () => {
     main.ingest(content.posted);
 
     const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
-    const delayedSecond = report.shots.find((shot) => shot.shotId === 'shot-1');
+    const delayedSecond = report.shots.find((shot) => String(shot.shotId).endsWith(':shot-1'));
     expect(delayedSecond).toMatchObject({ mode: 'burst', plannedAt: 1_500, timing: { fetchCalledAt: 1_060 } });
     expect(delayedSecond).not.toHaveProperty('queueDelayMs');
+  });
+
+  it('emits a run-scoped shot identifier for V2 persistence', async () => {
+    let now = 10_000;
+    const content = createContentHarness({ now: () => now++ });
+    const main = createMainLogExportHarness();
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, string>> };
+    expect(report.shots).toHaveLength(1);
+    expect(report.shots.every((shot) => shot.shotId === `${shot.runId}:shot-0`)).toBe(true);
+  });
+
+  it('emits run-scoped identifiers for cancelled tickets returned to the V2 log', async () => {
+    const content = createContentHarness({ returnedTicketCounts: [1] });
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const returned = content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned')?.data;
+    expect(returned).toMatchObject({
+      runId: expect.any(String),
+      shotIds: [expect.stringMatching(/:shot-0$/)],
+      shots: [expect.objectContaining({ shotId: expect.stringMatching(/:shot-0$/) })],
+    });
   });
 
   it('exports the content run trigger source and cumulative returned-ticket count', async () => {
@@ -702,8 +731,8 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.posted).toContainEqual(expect.objectContaining({
       type: 'FIRE_LOG_V2_EVENT',
       data: expect.objectContaining({
-        type: 'fetch_aborted', runId: expect.any(String), shotId: 'shot-0',
-        shot: expect.objectContaining({ outcome: 'cancelled', shotId: 'shot-0', releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
+        type: 'fetch_aborted', runId: expect.any(String), shotId: expect.stringMatching(/:shot-0$/),
+        shot: expect.objectContaining({ outcome: 'cancelled', shotId: expect.stringMatching(/:shot-0$/), releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
       }),
     }));
   });
@@ -759,7 +788,7 @@ describe('bm-capture.content.ts scope regression', () => {
 
     expect(harness.posted).toContainEqual(expect.objectContaining({
       type: 'FIRE_LOG_V2_EVENT',
-      data: expect.objectContaining({ type: 'fetch_timed_out', shotId: 'shot-0', shot: expect.objectContaining({ outcome: 'timed_out' }) }),
+      data: expect.objectContaining({ type: 'fetch_timed_out', shotId: expect.stringMatching(/:shot-0$/), shot: expect.objectContaining({ outcome: 'timed_out' }) }),
     }));
   });
 
