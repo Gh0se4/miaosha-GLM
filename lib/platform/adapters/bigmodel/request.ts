@@ -20,6 +20,16 @@ export interface XhrRequestOptions {
   onAbortReady?: (abort: () => void) => void;
 }
 
+/**
+ * Lifecycle callbacks belong to the isolated world.  postMessage uses the
+ * structured-clone algorithm, so forwarding them to MAIN would reject the
+ * entire request before fetch is called.
+ */
+export function toMainWorldFetchOptions(opts: XhrRequestOptions): Omit<XhrRequestOptions, 'onFetchStarted' | 'onAbortReady'> {
+  const { onFetchStarted: _onFetchStarted, onAbortReady: _onAbortReady, ...messageOptions } = opts;
+  return messageOptions;
+}
+
 export interface XhrResponse<T = unknown> {
   status: number;
   statusText: string;

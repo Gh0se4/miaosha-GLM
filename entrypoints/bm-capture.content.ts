@@ -16,7 +16,7 @@ import { bigmodelAdapter } from '../lib/platform';
 import type { PlatformAuth } from '../lib/platform';
 import { classifyPreviewError, classifyPreviewNetworkError, type ClassifiedShotResult } from '../lib/platform/adapters/bigmodel/order-pipeline';
 import { createAuthStore } from '../lib/platform/shared/stores';
-import { xhrRequest, setMainWorldFetcher, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
+import { xhrRequest, setMainWorldFetcher, toMainWorldFetchOptions, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 type StorageKey = `${'local' | 'session' | 'sync' | 'managed'}:${string}`;
@@ -637,7 +637,7 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
       }
     }
     window.addEventListener('message', handler);
-    window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', requestId, runId: opts.runId, shotId: opts.shotId, opts }, '*');
+    window.postMessage({ [MSG_CMD]: true, type: 'DO_FETCH', requestId, runId: opts.runId, shotId: opts.shotId, opts: toMainWorldFetchOptions(opts) }, '*');
     timeout = setTimeout(() => {
       if (settled) return;
       abort('timeout');
