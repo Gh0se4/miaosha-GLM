@@ -32,7 +32,7 @@ function buildHTML() {
     '<div class="pm" id="_pm"></div>' +
     '<div class="ps" id="_ps">暂无有效票 · 建议先录入验证码</div>' +
     '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0">' +
-      '<input type="checkbox" id="_ocrToggle" style="width:10px;height:10px;cursor:pointer">' +
+      '<input type="checkbox" id="_ocrToggle" checked style="width:10px;height:10px;cursor:pointer">' +
       '<label for="_ocrToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">🤖 OCR自动</label>' +
     '</div>' +
     '<div id="_ocrStatus" style="font-size:7px;color:#94a3b8;text-align:center;padding:2px 0;display:none"></div><button class="ab" id="_ab">+ Solve Captcha</button>' +
@@ -177,6 +177,11 @@ function injectOverlay() {
       var el = document.getElementById('_ocrStatus');
       if (el) {
         el.style.display = 'block';
+        if (typeof d.available === 'boolean') {
+          el.style.color = d.available ? '#059669' : '#dc2626';
+          el.textContent = d.available ? '🤖 OCR 状态正常' : '⚠️ OCR 服务未启动';
+          return;
+        }
         var step = d.step || '';
         if (step.indexOf('solved') !== -1) {
           el.style.color = '#059669'; el.textContent = '🤖 OCR 已识别';
@@ -334,6 +339,7 @@ function injectOverlay() {
   setTimeout(function() { cmdToOverlay('GET_SALE_TIME'); }, 800);
   setTimeout(function() { cmdToOverlay('GET_FIRE_CONFIG'); }, 1000);
   setTimeout(function() { cmdToOverlay('GET_RUNTIME_CALIBRATION'); }, 1200);
+  setTimeout(function() { cmdToOverlay('OCR_CHECK'); }, 1400);
 
   setTimeout(setupProductUI, 300);
 }
@@ -345,5 +351,7 @@ window.addEventListener('message', function(ev) {
   if (ev.source !== window) return;
   if (ev.data?.[MSG_CMD]) {
     if (ev.data.type === 'PRODUCE_CAPTCHA') produceCaptcha();
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_START') setBatchMode(true);
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_STOP') setBatchMode(false);
   }
 });
