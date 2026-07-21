@@ -545,6 +545,9 @@ describe('Fire Log V2 store', () => {
 
     expect(document.getElementById('default-panel-fv')).not.toBeNull();
     expect(document.getElementById('default-panel-fv_json')!.textContent).toBe('完整日志json');
+    expect((document.getElementById('default-panel-fv_stop') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.getElementById('default-panel-fv_stop')!.textContent).toBe('尚未开始');
+    (scope._fv_setStopState as (active: boolean) => void)(true);
     (document.getElementById('default-panel-fv_stop') as HTMLButtonElement).click();
     expect(posted).toContainEqual({ __command: true, type: 'CANCEL_FIRE' });
     document.body.innerHTML = '';

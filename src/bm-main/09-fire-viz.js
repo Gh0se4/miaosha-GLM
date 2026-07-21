@@ -134,7 +134,7 @@ function _fv_buildHTML() {
     '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.5.0</span>',
     '<span id="' + _NS + 'fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
     '<span id="' + _NS + 'fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
-    '<button id="' + _NS + 'fv_stop" style="border:1px solid #fecaca;background:#fff1f2;color:#be123c;border-radius:4px;padding:2px 7px;cursor:pointer;font-size:9px;font-weight:800">停止</button>',
+    '<button id="' + _NS + 'fv_stop" disabled style="border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;border-radius:4px;padding:2px 7px;cursor:not-allowed;font-size:9px;font-weight:800">尚未开始</button>',
     '<button id="' + _NS + 'fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
       'border:1px solid #e2e8f0;',
@@ -523,9 +523,21 @@ function _fv_clearLog() {
   }
 }
 
+function _fv_setStopState(active) {
+  var stop = document.getElementById(_NS + 'fv_stop');
+  if (!stop) return;
+  stop.disabled = !active;
+  stop.textContent = active ? '停止' : '尚未开始';
+  stop.style.cursor = active ? 'pointer' : 'not-allowed';
+  stop.style.color = active ? '#be123c' : '#94a3b8';
+  stop.style.borderColor = active ? '#fecaca' : '#e2e8f0';
+  stop.style.background = active ? '#fff1f2' : '#f8fafc';
+}
+
 function _fv_bindEvents() {
   var stop = document.getElementById(_NS + 'fv_stop');
   if (stop) stop.addEventListener('click', function() {
+    _fv_setStopState(false);
     window.postMessage({ [MSG_CMD]: true, type: 'CANCEL_FIRE' }, '*');
   });
 
@@ -604,10 +616,16 @@ window.addEventListener('message', function(e) {
 
   if (d.type === 'FIRE_BATCH_START') {
     _fv_show(d.data);
+    _fv_setStopState(true);
     return;
   }
 
   if (!document.getElementById(_NS + 'fv')) return;
+
+  if (d.type === 'FIRE_LOG_V2_RUN' && d.data && d.data.finishedAt) {
+    _fv_setStopState(false);
+    return;
+  }
 
   if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
     var outcome = d.data.outcome || 'error';
