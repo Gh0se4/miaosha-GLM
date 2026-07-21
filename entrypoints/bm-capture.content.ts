@@ -1684,7 +1684,7 @@ export default defineContentScript({
           try {
             const resp = await fetch('http://127.0.0.1:9898/health');
             const data = await resp.json();
-            postToOverlay({ type: 'OCR_STATUS', available: !!(data && data.ok) });
+            postToOverlay({ type: 'OCR_STATUS', available: !!(resp.ok && data && (data.ok || data.status === 'ok')) });
           } catch {
             postToOverlay({ type: 'OCR_STATUS', available: false });
           }

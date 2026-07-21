@@ -35,6 +35,10 @@ function buildHTML() {
       '<input type="checkbox" id="_ocrToggle" checked style="width:10px;height:10px;cursor:pointer">' +
       '<label for="_ocrToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">🤖 OCR自动</label>' +
     '</div>' +
+    '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0">' +
+      '<input type="checkbox" id="_autoToggle" style="width:10px;height:10px;cursor:pointer">' +
+      '<label for="_autoToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">⏱ 自动化录票/刷新</label>' +
+    '</div>' +
     '<div id="_ocrStatus" style="font-size:7px;color:#94a3b8;text-align:center;padding:2px 0;display:none"></div><button class="ab" id="_ab">+ Solve Captcha</button>' +
     '</div>' +
 
@@ -243,6 +247,9 @@ function injectOverlay() {
   });
 
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
+  document.getElementById('_autoToggle').addEventListener('change', function() {
+    if (typeof scheduleAutoTicketWindow === 'function' && _rt.nextSaleTime) scheduleAutoTicketWindow(_rt.nextSaleTime);
+  });
   document.getElementById('_fb').addEventListener('click', function() {
     window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
   });

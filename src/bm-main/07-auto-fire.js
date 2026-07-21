@@ -13,6 +13,16 @@ function scheduleAutoTicketWindow(nextSaleTime) {
   if (_autoTicketStartTimer) clearTimeout(_autoTicketStartTimer);
   if (_autoTicketStopTimer) clearTimeout(_autoTicketStopTimer);
   if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
+  _autoTicketStartTimer = _autoTicketStopTimer = _autoRefreshTimer = null;
+  var toggle = document.getElementById('_autoToggle');
+  if (!toggle || !toggle.checked) {
+    if (_autoTicketWindowActive) {
+      _autoTicketWindowActive = false;
+      window.postMessage({ [MSG_CMD]: true, type: 'AUTO_TICKET_WINDOW_STOP' }, '*');
+    }
+    _autoSetStatus('Auto: 自动化录票/刷新已关闭', '#64748b');
+    return;
+  }
   var now = Date.now(), startAt = nextSaleTime - AUTO_TICKET_START_LEAD_MS;
   var stopAt = nextSaleTime - AUTO_TICKET_STOP_LEAD_MS, refreshAt = nextSaleTime - AUTO_REFRESH_LEAD_MS;
   var refreshKey = (typeof _NS === 'string' ? _NS : '') + 'auto-refresh-' + nextSaleTime;
