@@ -228,6 +228,101 @@ describe('FireRunner', () => {
     expect(fixture.events.map(({ type }) => type)).toContain('run_finished');
   });
 
+  it.each(['success', 'waf', 'cancelled'] as const)(
+    'stops burst while waiting for a future slot after %s settles',
+    async (outcome) => {
+      const firstShot = deferred<{ outcome: Outcome }>();
+      const futureSlot = deferred<void>();
+      const started: string[] = [];
+      const fixture = makeInput({
+        runId: `future-terminal-${outcome}`,
+        mode: 'burst',
+        maxInFlight: 2,
+        slots: [
+          { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+          { shotId: 's2', productId: 'p2', productPriority: 1, requestSeq: 1, plannedAt: 100 },
+        ],
+        executeShot: async ({ shotId }) => {
+          started.push(shotId);
+          return shotId === 's1' ? firstShot.promise : { outcome: 'neterr' };
+        },
+      });
+      const waitUntil = vi.fn(async (targetMs: number) => {
+        await futureSlot.promise;
+        fixture.setNow(targetMs);
+      });
+      const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil });
+      let result: Awaited<ReturnType<FireRunner['run']>> | undefined;
+      const running = runner.run().then((value) => {
+        result = value;
+        return value;
+      });
+
+      await flush();
+      expect(waitUntil).toHaveBeenCalledWith(100);
+      firstShot.resolve({ outcome });
+      await flush();
+      await flush();
+
+      try {
+        expect(result).toEqual({ accepted: true, reason: outcome });
+        expect(started).toEqual(['s1']);
+        expect(fixture.events.filter(({ type }) => type === 'shot_released').map(({ payload }) => payload.shotId)).toEqual(['s1']);
+        expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'returned']);
+      } finally {
+        futureSlot.resolve();
+        await running;
+      }
+    },
+  );
+
+  it('keeps a future burst slot gated after a non-terminal in-flight result', async () => {
+    const firstShot = deferred<{ outcome: Outcome }>();
+    const futureSlot = deferred<void>();
+    const started: string[] = [];
+    const fixture = makeInput({
+      mode: 'burst',
+      maxInFlight: 2,
+      slots: [
+        { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+        { shotId: 's2', productId: 'p2', productPriority: 1, requestSeq: 1, plannedAt: 100 },
+      ],
+      executeShot: async ({ shotId }) => {
+        started.push(shotId);
+        return shotId === 's1' ? firstShot.promise : { outcome: 'neterr' };
+      },
+    });
+    const runner = new FireRunner(fixture.input, {
+      now: fixture.now,
+      waitUntil: async (targetMs) => {
+        await futureSlot.promise;
+        fixture.setNow(targetMs);
+      },
+    });
+    let finished = false;
+    const running = runner.run().then((value) => {
+      finished = true;
+      return value;
+    });
+
+    await flush();
+    firstShot.resolve({ outcome: 'neterr' });
+    await flush();
+    await flush();
+    const startedBeforeSlot = [...started];
+    const finishedBeforeSlot = finished;
+    const releaseTimesBeforeSlot = runner.snapshot().map(({ releasedAt }) => releasedAt);
+
+    futureSlot.resolve();
+    await running;
+
+    expect(startedBeforeSlot).toEqual(['s1']);
+    expect(finishedBeforeSlot).toBe(false);
+    expect(releaseTimesBeforeSlot).toEqual([0, undefined]);
+    expect(started).toEqual(['s1', 's2']);
+    expect(runner.snapshot().map(({ releasedAt }) => releasedAt)).toEqual([0, 100]);
+  });
+
   it('drains fetch-started shots before finishing after a terminal outcome', async () => {
     for (const outcome of ['success', 'waf', 'cancelled'] as const) {
       const pending = [deferred<{ outcome: Outcome }>(), deferred<{ outcome: Outcome }>()];

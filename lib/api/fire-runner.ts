@@ -138,8 +138,12 @@ export class FireRunner {
             ? next.plannedAt
             : Math.max(next.plannedAt, lastFetchStartedAt + Math.max(0, this.input.intervalMs));
           if (this.now() < earliestAt) {
-            await Promise.race([this.waitUntil(earliestAt), this.cancelSignal]);
-            if (this.cancelled) break;
+            let slotReady = false;
+            const slotReadySignal = this.waitUntil(earliestAt).then(() => { slotReady = true; });
+            while (!slotReady && !this.cancelled && stopReason === 'complete') {
+              await Promise.race([slotReadySignal, this.cancelSignal, ...inFlight]);
+            }
+            if (this.cancelled || stopReason !== 'complete') break;
           }
 
           this.release(next);
