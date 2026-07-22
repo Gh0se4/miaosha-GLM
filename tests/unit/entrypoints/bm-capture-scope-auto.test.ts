@@ -78,6 +78,7 @@ function createAutoTicketHarness(options: {
     messages,
     storage,
     toggle,
+    get activeSaleTime() { return (context as any)._autoTicketWindowSaleTime; },
     get reloadCount() { return reloadCount; },
   };
 }
@@ -147,6 +148,75 @@ describe('auto fire prepare-run lifecycle', () => {
       nextSaleTime,
       timestamp: stopAt,
       reason: 'window_elapsed',
+      details: { startAt, stopAt },
+    });
+  });
+
+  it('stops an active sale before scheduling a different sale without same-sale jitter', () => {
+    const saleA = 2_000_000;
+    const saleB = saleA + 60 * 60 * 1_000;
+    const startA = saleA - (4 * 60 + 58) * 1_000;
+    const stopA = saleA - 10_000;
+    const startB = saleB - (4 * 60 + 58) * 1_000;
+    const stopB = saleB - 10_000;
+    const storage = new Map([
+      ['auto-ticket-test-auto-refresh-' + saleA, '1'],
+      ['auto-ticket-test-auto-refresh-' + saleB, '1'],
+    ]);
+    const harness = createAutoTicketHarness({ now: startA, storage });
+
+    harness.api.scheduleAutoTicketWindow(saleA);
+    harness.api.scheduleAutoTicketWindow(saleB);
+
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_STOP')).toHaveLength(1);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'window_stopped',
+      nextSaleTime: saleA,
+      timestamp: startA,
+      reason: 'sale_rescheduled',
+      details: { startAt: startA, stopAt: stopA, rescheduledTo: saleB },
+    });
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_START')).toHaveLength(1);
+
+    harness.advanceTo(startB - 1);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_START')).toHaveLength(1);
+    harness.advanceTo(startB);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_START')).toHaveLength(2);
+    expect(autoTicketDiagnostics(harness.messages).filter((event) => event.type === 'window_started' && event.nextSaleTime === saleB)).toHaveLength(1);
+
+    harness.api.scheduleAutoTicketWindow(saleB);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_START')).toHaveLength(2);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_STOP')).toHaveLength(1);
+
+    harness.advanceTo(stopB);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_STOP')).toHaveLength(2);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'window_stopped',
+      nextSaleTime: saleB,
+      timestamp: stopB,
+      reason: 'window_elapsed',
+      details: { startAt: startB, stopAt: stopB },
+    });
+  });
+
+  it('clears the active sale identity when automatic capture is disabled', () => {
+    const nextSaleTime = 2_000_000;
+    const startAt = nextSaleTime - (4 * 60 + 58) * 1_000;
+    const stopAt = nextSaleTime - 10_000;
+    const storage = new Map([['auto-ticket-test-auto-refresh-' + nextSaleTime, '1']]);
+    const harness = createAutoTicketHarness({ now: startAt, storage });
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+    expect(harness.activeSaleTime).toBe(nextSaleTime);
+
+    harness.toggle.checked = false;
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+
+    expect(harness.activeSaleTime).toBeNull();
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'window_stopped',
+      nextSaleTime,
+      timestamp: startAt,
+      reason: 'auto_disabled',
       details: { startAt, stopAt },
     });
   });
