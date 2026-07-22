@@ -64,12 +64,10 @@ function loadBridge(fetch: ReturnType<typeof vi.fn>, onPost?: (message: Message)
   };
 }
 
-async function flush() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+async function waitForPostedTypes(bridge: ReturnType<typeof loadBridge>, types: string[]) {
+  await vi.waitFor(() => {
+    expect(bridge.posted.map((message) => message.type)).toEqual(types);
+  });
 }
 
 function expectBridgeTiming(timing: unknown): asserts timing is BridgeTiming {
@@ -120,9 +118,8 @@ describe('MAIN world fetch bridge protocol', () => {
     const bridge = loadBridge(fetch);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'request-1', runId: 'run-1', shotId: 'shot-1', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
 
-    expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
     const [started, result] = bridge.posted;
     expect(started).toMatchObject({ __evt: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1' });
     expect(result).toMatchObject({ __evt: true, ok: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1', status: 201, statusText: 'Created', body: '{"ok":true}', headers: { 'x-trace': 'trace-1' } });
@@ -144,7 +141,7 @@ describe('MAIN world fetch bridge protocol', () => {
     const bridge = loadBridge(fetch);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', reqId: 'legacy-1', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
 
     expect(bridge.posted).toHaveLength(2);
     for (const message of bridge.posted) {
@@ -167,13 +164,13 @@ describe('MAIN world fetch bridge protocol', () => {
     });
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'sync-fail', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_RESULT']);
     expect(bridge.posted).toHaveLength(1);
     expect(bridge.posted[0]).toMatchObject({ type: 'DO_FETCH_RESULT', ok: false, status: 0, statusText: '', headers: {}, body: '' });
     expectStartedTiming(bridge.posted[0].timing);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'started-after-fetch', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_RESULT', 'DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
     expect(observedFetchCalls).toEqual([2]);
   });
 
@@ -187,7 +184,7 @@ describe('MAIN world fetch bridge protocol', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
 
     pending.resolve({ status: 200, statusText: 'OK', headers: new Map(), text: () => Promise.resolve('original') });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
     expect(bridge.posted.filter((message) => message.type === 'DO_FETCH_RESULT')).toEqual([
       expect.objectContaining({ requestId: 'same-id', ok: true, body: 'original' }),
     ]);
@@ -224,9 +221,8 @@ describe('MAIN world fetch bridge protocol', () => {
     const bridge = loadBridge(fetch);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'reject-1', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
 
-    expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
     expectStartedTiming(bridge.posted[0].timing);
     expect(bridge.posted[1]).toMatchObject({ ok: false, error: 'network failure' });
     expectStartedTiming(bridge.posted[1].timing);
@@ -242,9 +238,8 @@ describe('MAIN world fetch bridge protocol', () => {
     const bridge = loadBridge(fetch);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'body-fail-1', opts: { url: 'https://bigmodel.cn/api/test' } });
-    await flush();
+    await waitForPostedTypes(bridge, ['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
 
-    expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
     expectStartedTiming(bridge.posted[0].timing);
     expect(bridge.posted[1]).toMatchObject({ ok: false, error: 'body failure' });
     expectHeadersTiming(bridge.posted[1].timing);
@@ -252,6 +247,8 @@ describe('MAIN world fetch bridge protocol', () => {
 
   it('aborts a matching request and suppresses its late result', async () => {
     const pending = deferred<{ status: number; statusText: string; headers: Map<string, string>; text: () => Promise<string> }>();
+    const body = deferred<string>();
+    const readBody = vi.fn(() => body.promise);
     const fetch = vi.fn().mockReturnValue(pending.promise);
     const bridge = loadBridge(fetch);
 
@@ -261,8 +258,10 @@ describe('MAIN world fetch bridge protocol', () => {
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH_CANCEL', requestId: 'request-cancel' });
     expect(signal.aborted).toBe(true);
 
-    pending.resolve({ status: 200, statusText: 'OK', headers: new Map(), text: () => Promise.resolve('late') });
-    await flush();
+    pending.resolve({ status: 200, statusText: 'OK', headers: new Map(), text: readBody });
+    await vi.waitFor(() => expect(readBody).toHaveBeenCalledOnce());
+    body.resolve('late');
+    await body.promise;
     expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED']);
   });
 });
