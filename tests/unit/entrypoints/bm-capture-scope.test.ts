@@ -461,6 +461,29 @@ describe('bm-capture.content.ts scope regression', () => {
     await expect(harness.start()).resolves.toBeUndefined();
   });
 
+  it('forwards automatic ticket diagnostics as structured V2 log events', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    const nextSaleTime = 2_000_000;
+    const diagnostics = [
+      { type: 'refresh_scheduled', nextSaleTime, timestamp: 100, reason: 'timer_scheduled', details: { refreshAt: 200, delayMs: 100 } },
+      { type: 'refresh_skipped', nextSaleTime, timestamp: 200, reason: 'already_refreshed', details: { refreshAt: 200 } },
+      { type: 'refresh_triggered', nextSaleTime, timestamp: 200, reason: 'timer_elapsed', details: { refreshAt: 200 } },
+      { type: 'window_started', nextSaleTime, timestamp: 300, reason: 'window_opened', details: { startAt: 300, stopAt: 400 } },
+      { type: 'window_stopped', nextSaleTime, timestamp: 400, reason: 'window_elapsed', details: { startAt: 300, stopAt: 400 } },
+    ];
+
+    for (const diagnostic of diagnostics) {
+      await harness.command('AUTO_TICKET_DIAGNOSTIC', diagnostic);
+    }
+
+    const diagnosticTypes = new Set(diagnostics.map((diagnostic) => diagnostic.type));
+    expect(harness.posted
+      .filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && diagnosticTypes.has(message.data?.type))
+      .map((message) => message.data))
+      .toEqual(diagnostics);
+  });
+
   it('cancels an auth-preparing auto run before it reserves tickets or fetches', async () => {
     const capture = deferred<any>();
     const harness = createContentHarness({ capture: capture.promise });

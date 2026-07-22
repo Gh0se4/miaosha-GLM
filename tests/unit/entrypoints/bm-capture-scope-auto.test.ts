@@ -5,6 +5,84 @@ import { FireRunner } from '../../../lib/api/fire-runner';
 import { buildFireSchedule } from '../../../lib/api/fire-scheduler';
 import AUTO_SOURCE from '../../../src/bm-main/07-auto-fire.js?raw';
 
+type AutoTicketTimer = {
+  callback: () => void;
+  dueAt: number;
+};
+
+function createAutoTicketHarness(options: {
+  now: number;
+  storage?: Map<string, string>;
+}) {
+  let now = options.now;
+  let nextTimerId = 1;
+  let reloadCount = 0;
+  const storage = options.storage ?? new Map<string, string>();
+  const messages: any[] = [];
+  const actions: string[] = [];
+  const timers = new Map<number, AutoTicketTimer>();
+  const toggle = { checked: true };
+  class FakeDate extends Date {
+    static now() { return now; }
+  }
+  const context = {
+    _NS: 'auto-ticket-test-',
+    _rt: { latencyMs: 0, clockOffsetMs: 0, autoTimer: null, countdownTimer: null, autoFired: false, nextSaleTime: 0 },
+    MSG_CMD: '__cmd',
+    Date: FakeDate,
+    document: { getElementById: (id: string) => id === '_autoToggle' ? toggle : null },
+    window: { postMessage: (message: any) => {
+      messages.push(message);
+      actions.push('message:' + message.type + (message.data?.type ? ':' + message.data.type : ''));
+    } },
+    location: { reload: () => { reloadCount++; actions.push('reload'); } },
+    sessionStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); actions.push('storage:' + key); },
+    },
+    setTimeout: (callback: () => void, delay: number) => {
+      const id = nextTimerId++;
+      timers.set(id, { callback, dueAt: now + delay });
+      return id;
+    },
+    clearTimeout: (id: number) => { timers.delete(id); },
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  };
+  const api = vm.runInNewContext(`${AUTO_SOURCE}; ({ scheduleAutoTicketWindow })`, context) as {
+    scheduleAutoTicketWindow(nextSaleTime: number): void;
+  };
+
+  function advanceTo(target: number) {
+    while (true) {
+      const due = [...timers.entries()]
+        .filter(([, timer]) => timer.dueAt <= target)
+        .sort((left, right) => left[1].dueAt - right[1].dueAt || left[0] - right[0])[0];
+      if (!due) break;
+      timers.delete(due[0]);
+      now = due[1].dueAt;
+      due[1].callback();
+    }
+    now = target;
+  }
+
+  return {
+    api,
+    advanceTo,
+    actions,
+    messages,
+    storage,
+    toggle,
+    get reloadCount() { return reloadCount; },
+  };
+}
+
+function autoTicketDiagnostics(messages: any[]) {
+  return messages
+    .filter((message) => message.type === 'AUTO_TICKET_DIAGNOSTIC')
+    .map((message) => message.data);
+}
+
 
 function makeRunner(mode: 'manual' | 'burst' | 'auto', intervalMs: number) {
   let now = 100;
@@ -36,6 +114,136 @@ function makeRunner(mode: 'manual' | 'burst' | 'auto', intervalMs: number) {
 }
 
 describe('auto fire prepare-run lifecycle', () => {
+  it('opens at exactly T-4m58s and closes at exactly T-10s', () => {
+    const nextSaleTime = 2_000_000;
+    const startAt = nextSaleTime - (4 * 60 + 58) * 1_000;
+    const stopAt = nextSaleTime - 10_000;
+    const storage = new Map([['auto-ticket-test-auto-refresh-' + nextSaleTime, '1']]);
+    const harness = createAutoTicketHarness({ now: startAt, storage });
+
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_START')).toHaveLength(1);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'window_started',
+      nextSaleTime,
+      timestamp: startAt,
+      reason: 'window_opened',
+      details: { startAt, stopAt },
+    });
+
+    harness.advanceTo(stopAt - 1);
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_STOP')).toHaveLength(0);
+    harness.advanceTo(stopAt);
+
+    expect(harness.messages.filter((message) => message.type === 'AUTO_TICKET_WINDOW_STOP')).toHaveLength(1);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'window_stopped',
+      nextSaleTime,
+      timestamp: stopAt,
+      reason: 'window_elapsed',
+      details: { startAt, stopAt },
+    });
+  });
+
+  it('triggers refresh at exactly the T-30m boundary', () => {
+    const nextSaleTime = 3_000_000;
+    const refreshAt = nextSaleTime - 30 * 60 * 1_000;
+    const harness = createAutoTicketHarness({ now: refreshAt });
+
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+    harness.advanceTo(refreshAt);
+
+    expect(harness.reloadCount).toBe(1);
+    expect(harness.storage.get('auto-ticket-test-auto-refresh-' + nextSaleTime)).toBe('1');
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'refresh_scheduled',
+      nextSaleTime,
+      timestamp: refreshAt,
+      reason: 'timer_scheduled',
+      details: { refreshAt, delayMs: 0 },
+    });
+  });
+
+  it('records an elapsed refresh decision after the T-30m boundary', () => {
+    const nextSaleTime = 3_000_000;
+    const refreshAt = nextSaleTime - 30 * 60 * 1_000;
+    const harness = createAutoTicketHarness({ now: refreshAt + 1 });
+
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+
+    expect(harness.reloadCount).toBe(0);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'refresh_skipped',
+      nextSaleTime,
+      timestamp: refreshAt + 1,
+      reason: 'window_elapsed',
+      details: { refreshAt },
+    });
+  });
+
+  it('marks a sale before reload, then recovers without reloading the same sale', () => {
+    const nextSaleTime = 4_000_000;
+    const refreshAt = nextSaleTime - 30 * 60 * 1_000;
+    const firstPage = createAutoTicketHarness({ now: refreshAt - 1 });
+
+    firstPage.api.scheduleAutoTicketWindow(nextSaleTime);
+    expect(autoTicketDiagnostics(firstPage.messages)).toContainEqual({
+      type: 'refresh_scheduled',
+      nextSaleTime,
+      timestamp: refreshAt - 1,
+      reason: 'timer_scheduled',
+      details: { refreshAt, delayMs: 1 },
+    });
+
+    firstPage.advanceTo(refreshAt);
+    expect(firstPage.storage.get('auto-ticket-test-auto-refresh-' + nextSaleTime)).toBe('1');
+    expect(autoTicketDiagnostics(firstPage.messages)).toContainEqual({
+      type: 'refresh_triggered',
+      nextSaleTime,
+      timestamp: refreshAt,
+      reason: 'timer_elapsed',
+      details: { refreshAt },
+    });
+    expect(firstPage.reloadCount).toBe(1);
+    expect(firstPage.actions).toEqual(expect.arrayContaining([
+      'message:AUTO_TICKET_DIAGNOSTIC:refresh_scheduled',
+      'storage:auto-ticket-test-auto-refresh-' + nextSaleTime,
+      'message:AUTO_TICKET_DIAGNOSTIC:refresh_triggered',
+      'reload',
+    ]));
+    expect(firstPage.actions.indexOf('message:AUTO_TICKET_DIAGNOSTIC:refresh_scheduled'))
+      .toBeLessThan(firstPage.actions.indexOf('storage:auto-ticket-test-auto-refresh-' + nextSaleTime));
+    expect(firstPage.actions.indexOf('storage:auto-ticket-test-auto-refresh-' + nextSaleTime))
+      .toBeLessThan(firstPage.actions.indexOf('message:AUTO_TICKET_DIAGNOSTIC:refresh_triggered'));
+    expect(firstPage.actions.indexOf('message:AUTO_TICKET_DIAGNOSTIC:refresh_triggered'))
+      .toBeLessThan(firstPage.actions.indexOf('reload'));
+
+    const reloadedPage = createAutoTicketHarness({ now: refreshAt, storage: firstPage.storage });
+    reloadedPage.api.scheduleAutoTicketWindow(nextSaleTime);
+    expect(reloadedPage.reloadCount).toBe(0);
+    expect(autoTicketDiagnostics(reloadedPage.messages)).toContainEqual({
+      type: 'refresh_skipped',
+      nextSaleTime,
+      timestamp: refreshAt,
+      reason: 'already_refreshed',
+      details: { refreshAt },
+    });
+
+    const followingSaleTime = nextSaleTime + 60 * 60 * 1_000;
+    reloadedPage.api.scheduleAutoTicketWindow(followingSaleTime);
+    expect(autoTicketDiagnostics(reloadedPage.messages)).toContainEqual({
+      type: 'refresh_scheduled',
+      nextSaleTime: followingSaleTime,
+      timestamp: refreshAt,
+      reason: 'timer_scheduled',
+      details: {
+        refreshAt: followingSaleTime - 30 * 60 * 1_000,
+        delayMs: followingSaleTime - 30 * 60 * 1_000 - refreshAt,
+      },
+    });
+  });
+
   it('prepares three seconds before the compensated first-fetch time', async () => {
     const messages: unknown[] = [];
     const timers: Array<{ callback: () => void; delay: number }> = [];

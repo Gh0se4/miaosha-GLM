@@ -9,38 +9,65 @@ function _autoSetStatus(text, color) {
   if (el) { el.textContent = text; if (color) el.style.color = color; }
 }
 
+function _autoTicketDiagnostic(type, nextSaleTime, timestamp, reason, details) {
+  window.postMessage({ [MSG_CMD]: true, type: 'AUTO_TICKET_DIAGNOSTIC', data: {
+    type: type,
+    nextSaleTime: nextSaleTime,
+    timestamp: timestamp,
+    reason: reason,
+    details: details || {},
+  } }, '*');
+}
+
 function scheduleAutoTicketWindow(nextSaleTime) {
   if (_autoTicketStartTimer) clearTimeout(_autoTicketStartTimer);
   if (_autoTicketStopTimer) clearTimeout(_autoTicketStopTimer);
   if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
   _autoTicketStartTimer = _autoTicketStopTimer = _autoRefreshTimer = null;
+  var now = Date.now(), startAt = nextSaleTime - AUTO_TICKET_START_LEAD_MS;
+  var stopAt = nextSaleTime - AUTO_TICKET_STOP_LEAD_MS, refreshAt = nextSaleTime - AUTO_REFRESH_LEAD_MS;
   var toggle = document.getElementById('_autoToggle');
   if (!toggle || !toggle.checked) {
     if (_autoTicketWindowActive) {
       _autoTicketWindowActive = false;
       window.postMessage({ [MSG_CMD]: true, type: 'AUTO_TICKET_WINDOW_STOP' }, '*');
+      _autoTicketDiagnostic('window_stopped', nextSaleTime, now, 'auto_disabled', { startAt: startAt, stopAt: stopAt });
     }
     _autoSetStatus('Auto: 自动化录票/刷新已关闭', '#64748b');
     return;
   }
-  var now = Date.now(), startAt = nextSaleTime - AUTO_TICKET_START_LEAD_MS;
-  var stopAt = nextSaleTime - AUTO_TICKET_STOP_LEAD_MS, refreshAt = nextSaleTime - AUTO_REFRESH_LEAD_MS;
   var refreshKey = (typeof _NS === 'string' ? _NS : '') + 'auto-refresh-' + nextSaleTime;
+  var alreadyRefreshed = false;
   try {
-    if (refreshAt > now && !sessionStorage.getItem(refreshKey)) {
-      _autoRefreshTimer = setTimeout(function() { try { sessionStorage.setItem(refreshKey, '1'); } catch (e) {} location.reload(); }, refreshAt - now);
-    }
+    alreadyRefreshed = !!sessionStorage.getItem(refreshKey);
   } catch (e) {}
+  if (alreadyRefreshed) {
+    _autoTicketDiagnostic('refresh_skipped', nextSaleTime, now, 'already_refreshed', { refreshAt: refreshAt });
+  } else if (refreshAt < now) {
+    _autoTicketDiagnostic('refresh_skipped', nextSaleTime, now, 'window_elapsed', { refreshAt: refreshAt });
+  } else {
+    var refreshDelay = refreshAt - now;
+    _autoTicketDiagnostic('refresh_scheduled', nextSaleTime, now, 'timer_scheduled', { refreshAt: refreshAt, delayMs: refreshDelay });
+    _autoRefreshTimer = setTimeout(function() {
+      _autoRefreshTimer = null;
+      try { sessionStorage.setItem(refreshKey, '1'); } catch (e) {}
+      _autoTicketDiagnostic('refresh_triggered', nextSaleTime, Date.now(), 'timer_elapsed', { refreshAt: refreshAt });
+      setTimeout(function() { location.reload(); }, 0);
+    }, refreshDelay);
+  }
   function start() {
     if (Date.now() >= stopAt) return;
+    if (_autoTicketWindowActive) return;
     _autoTicketWindowActive = true;
     window.postMessage({ [MSG_CMD]: true, type: 'AUTO_TICKET_WINDOW_START' }, '*');
+    _autoTicketDiagnostic('window_started', nextSaleTime, Date.now(), 'window_opened', { startAt: startAt, stopAt: stopAt });
     _autoSetStatus('Auto: 录票中（T−10秒停止）', '#6366f1');
   }
   function stop() {
     if (!_autoTicketWindowActive) return;
     _autoTicketWindowActive = false;
     window.postMessage({ [MSG_CMD]: true, type: 'AUTO_TICKET_WINDOW_STOP' }, '*');
+    _autoTicketDiagnostic('window_stopped', nextSaleTime, Date.now(), 'window_elapsed', { startAt: startAt, stopAt: stopAt });
     _autoSetStatus('Auto: 已停止录票，等待发射', '#d97706');
   }
   if (startAt <= now) start(); else _autoTicketStartTimer = setTimeout(start, startAt - now);

@@ -1573,6 +1573,9 @@ export default defineContentScript({
 
       // From overlay (MAIN world) — commands
       if (event.data?.[MSG_CMD]) {
+        if (event.data.type === 'AUTO_TICKET_DIAGNOSTIC' && event.data.data?.type) {
+          postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { ...event.data.data } });
+        }
         if (event.data.type === 'GET_TICKET_COUNT') {
           const info = await getTicketInfo();
           postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
