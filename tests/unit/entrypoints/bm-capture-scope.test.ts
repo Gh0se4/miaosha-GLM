@@ -78,6 +78,7 @@ function createContentHarness(options: {
   now?: () => number;
   monotonicNow?: () => number;
   onPreparationReady?: () => void;
+  ocrAutoPreference?: unknown;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
@@ -88,6 +89,7 @@ function createContentHarness(options: {
   let runnerCount = 0;
   let calibrationCalls = 0;
   let orderResultIndex = 0;
+  const storageWrites: Array<{ key: string; value: unknown }> = [];
   let nextSaleTime = options.nextSaleTime ?? Date.now() + 60 * 60 * 1000;
   const auth = {
     platform: 'bigmodel',
@@ -108,9 +110,12 @@ function createContentHarness(options: {
         return { priorityList: [{ productId: 'product-1' }] };
       }
       if (key === 'local:runtimeCalibration') return options.runtimeCalibration ?? null;
+      if (key === 'local:ocrAutoEnabled') return options.ocrAutoPreference ?? null;
       return null;
     },
-    setItem: async () => undefined,
+    setItem: async (key: string, value: unknown) => {
+      storageWrites.push({ key, value });
+    },
   };
   let contentScript: any;
   const window = {
@@ -288,6 +293,7 @@ function createContentHarness(options: {
 
   return {
     posted,
+    storageWrites,
     runnerEvents,
     runnerSlotShotIds,
     fireRequestShotIds,
@@ -459,6 +465,43 @@ describe('bm-capture.content.ts scope regression', () => {
   it('loads when chrome.runtime does not expose getManifest', async () => {
     const harness = createContentHarness();
     await expect(harness.start()).resolves.toBeUndefined();
+  });
+
+  it('defaults the OCR automatic preference to enabled when storage is empty', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+
+    await harness.command('GET_OCR_AUTO_PREF');
+
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: true,
+    });
+  });
+
+  it('returns the stored disabled OCR automatic preference', async () => {
+    const harness = createContentHarness({ ocrAutoPreference: false });
+    await harness.start();
+
+    await harness.command('GET_OCR_AUTO_PREF');
+
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: false,
+    });
+  });
+
+  it('persists and echoes the canonical OCR automatic preference', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+
+    await harness.command('SET_OCR_AUTO_PREF', { enabled: false });
+
+    expect(harness.storageWrites).toContainEqual({ key: 'local:ocrAutoEnabled', value: false });
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: false,
+    });
   });
 
   it('forwards automatic ticket diagnostics as structured V2 log events', async () => {

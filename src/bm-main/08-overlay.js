@@ -177,6 +177,11 @@ function injectOverlay() {
       renderCaptchaMeter();
     }
 
+    if (d.type === 'OCR_AUTO_PREF') {
+      var ocrToggle = document.getElementById('_ocrToggle');
+      if (ocrToggle) ocrToggle.checked = d.enabled !== false;
+    }
+
     if (d.type === 'OCR_STATUS') {
       var el = document.getElementById('_ocrStatus');
       if (el) {
@@ -249,6 +254,9 @@ function injectOverlay() {
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
   document.getElementById('_autoToggle').addEventListener('change', function() {
     if (typeof scheduleAutoTicketWindow === 'function' && _rt.nextSaleTime) scheduleAutoTicketWindow(_rt.nextSaleTime);
+  });
+  document.getElementById('_ocrToggle').addEventListener('change', function() {
+    cmdToOverlay('SET_OCR_AUTO_PREF', { enabled: this.checked });
   });
   document.getElementById('_fb').addEventListener('click', function() {
     window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
@@ -346,6 +354,7 @@ function injectOverlay() {
   setTimeout(function() { cmdToOverlay('GET_SALE_TIME'); }, 800);
   setTimeout(function() { cmdToOverlay('GET_FIRE_CONFIG'); }, 1000);
   setTimeout(function() { cmdToOverlay('GET_RUNTIME_CALIBRATION'); }, 1200);
+  setTimeout(function() { cmdToOverlay('GET_OCR_AUTO_PREF'); }, 1400);
   setTimeout(function() { cmdToOverlay('OCR_CHECK'); }, 1400);
 
   setTimeout(setupProductUI, 300);

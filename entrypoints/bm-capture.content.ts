@@ -20,6 +20,7 @@ import { xhrRequest, setMainWorldFetcher, toMainWorldFetchOptions, type MainWorl
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 type StorageKey = `${'local' | 'session' | 'sync' | 'managed'}:${string}`;
+const OCR_AUTO_PREF_KEY: StorageKey = 'local:ocrAutoEnabled';
 const TICKET_TTL_MS = 5 * 60 * 1000; // alpha: 5 minutes per-ticket lifecycle
 
 // ── Runtime namespace (set by bm-early.js at document_start) ──────────────
@@ -1653,6 +1654,15 @@ export default defineContentScript({
             if (isExtensionContextValid()) await fireStore.set(next);
           } catch {}
           postToOverlay({ type: 'FIRE_CONFIG', data: next });
+        }
+        if (event.data.type === 'GET_OCR_AUTO_PREF') {
+          const enabled = (await safeGet<unknown>(OCR_AUTO_PREF_KEY)) !== false;
+          postToOverlay({ type: 'OCR_AUTO_PREF', enabled });
+        }
+        if (event.data.type === 'SET_OCR_AUTO_PREF') {
+          const enabled = event.data.data?.enabled !== false;
+          await safeSet(OCR_AUTO_PREF_KEY, enabled);
+          postToOverlay({ type: 'OCR_AUTO_PREF', enabled });
         }
         if (event.data.type === 'OCR_CAPTURE' && event.data.data?.reqId) {
           // Capture visible tab (includes cross-origin captcha popup)
