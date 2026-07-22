@@ -57,6 +57,11 @@ export interface FireRunResult {
 
 let activeRunLock = false;
 
+function toRunScopedShotId(runId: string, shotId: string): string {
+  const runPrefix = `${runId}:`;
+  return shotId.startsWith(runPrefix) ? shotId : `${runPrefix}${shotId}`;
+}
+
 export class FireRunner {
   private readonly now: () => number;
   private readonly waitUntil: (targetMs: number) => Promise<void>;
@@ -77,7 +82,7 @@ export class FireRunner {
       shotId: slot.shotId,
       productId: slot.productId,
       requestSeq: slot.requestSeq,
-      ticketKey: `${input.runId}:${slot.shotId}`,
+      ticketKey: toRunScopedShotId(input.runId, slot.shotId),
       state: 'available',
       plannedAt: slot.plannedAt,
     }));
@@ -192,7 +197,7 @@ export class FireRunner {
     outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
     fetchStartedAt?: number;
   }> {
-    const requestId = `${this.input.runId}:${shot.shotId}:${shot.requestSeq}`;
+    const requestId = `${toRunScopedShotId(this.input.runId, shot.shotId)}:${shot.requestSeq}`;
     let fetchStartedAt: number | undefined;
     const onFetchStarted = (meta: { fetchStartedAt?: number; [key: string]: unknown } = {}) => {
       if (shot.state !== 'released') return;

@@ -699,10 +699,12 @@ describe('bm-capture.content.ts scope regression', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const returned = content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned')?.data;
+    expect(returned).toBeDefined();
+    const expectedShotId = `${returned.runId}:shot-0`;
     expect(returned).toMatchObject({
       runId: expect.any(String),
-      shotIds: [expect.stringMatching(/:shot-0$/)],
-      shots: [expect.objectContaining({ shotId: expect.stringMatching(/:shot-0$/) })],
+      shotIds: [expectedShotId],
+      shots: [expect.objectContaining({ shotId: expectedShotId })],
     });
   });
 
@@ -776,13 +778,13 @@ describe('bm-capture.content.ts scope regression', () => {
     });
     await firing;
 
-    expect(harness.posted).toContainEqual(expect.objectContaining({
-      type: 'FIRE_LOG_V2_EVENT',
-      data: expect.objectContaining({
-        type: 'fetch_aborted', runId: expect.any(String), shotId: expect.stringMatching(/:shot-0$/),
-        shot: expect.objectContaining({ outcome: 'cancelled', shotId: expect.stringMatching(/:shot-0$/), releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
-      }),
-    }));
+    const aborted = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_aborted')?.data;
+    expect(aborted).toBeDefined();
+    const expectedShotId = `${aborted.runId}:shot-0`;
+    expect(aborted).toMatchObject({
+      type: 'fetch_aborted', runId: expect.any(String), shotId: expectedShotId,
+      shot: expect.objectContaining({ outcome: 'cancelled', shotId: expectedShotId, releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
+    });
   });
 
   it('records prepare start and all auto target timing components in the V2 run', async () => {
@@ -881,10 +883,13 @@ describe('bm-capture.content.ts scope regression', () => {
     await harness.start();
     await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
 
-    expect(harness.posted).toContainEqual(expect.objectContaining({
-      type: 'FIRE_LOG_V2_EVENT',
-      data: expect.objectContaining({ type: 'fetch_timed_out', shotId: expect.stringMatching(/:shot-0$/), shot: expect.objectContaining({ outcome: 'timed_out' }) }),
-    }));
+    const timedOut = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_timed_out')?.data;
+    expect(timedOut).toBeDefined();
+    const expectedShotId = `${timedOut.runId}:shot-0`;
+    expect(timedOut).toMatchObject({
+      type: 'fetch_timed_out', shotId: expectedShotId,
+      shot: expect.objectContaining({ outcome: 'timed_out', shotId: expectedShotId }),
+    });
   });
 
   it.each([

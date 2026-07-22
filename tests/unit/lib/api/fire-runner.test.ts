@@ -66,6 +66,28 @@ function makeInput(overrides: Partial<FireRunInput> = {}, transportStarts = true
 }
 
 describe('FireRunner', () => {
+  it.each([
+    ['canonical', 'run-1:shot-0', 'run-1:shot-0', 'run-1:shot-0:0'],
+    ['local', 's1', 'run-1:s1', 'run-1:s1:0'],
+  ])('scopes a %s shot identifier exactly once', async (_kind, shotId, ticketKey, expectedRequestId) => {
+    let requestId = '';
+    const fixture = makeInput({
+      slots: [{ shotId, productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 }],
+      executeShot: async (ctx) => {
+        requestId = ctx.requestId;
+        return { outcome: 'neterr' };
+      },
+    });
+    const runner = new FireRunner(fixture.input, { now: fixture.now, waitUntil: fixture.waitUntil });
+
+    await runner.run();
+
+    expect({ ticketKey: runner.snapshot()[0]?.ticketKey, requestId }).toEqual({
+      ticketKey,
+      requestId: expectedRequestId,
+    });
+  });
+
   it('rejects a second run before it reserves or schedules tickets', async () => {
     const firstShot = deferred<{ outcome: Outcome }>();
     const first = makeInput({
