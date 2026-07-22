@@ -20,6 +20,12 @@ async function flush() {
   await Promise.resolve();
 }
 
+async function waitForCondition(condition: () => boolean, message: string) {
+  await vi.waitFor(() => {
+    if (!condition()) throw new Error(message);
+  }, { interval: 1, timeout: 1_000 });
+}
+
 function makeInput(overrides: Partial<FireRunInput> = {}, transportStarts = true) {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const starts: Array<{ shotId: string; at: number }> = [];
@@ -258,18 +264,24 @@ describe('FireRunner', () => {
         return value;
       });
 
-      await flush();
-      expect(waitUntil).toHaveBeenCalledWith(100);
-      firstShot.resolve({ outcome });
-      await flush();
-      await flush();
-
       try {
+        await waitForCondition(
+          () => started.includes('s1') && waitUntil.mock.calls.length === 1,
+          'burst runner did not start waiting for the future slot',
+        );
+        expect(waitUntil).toHaveBeenCalledWith(100);
+        firstShot.resolve({ outcome });
+        await waitForCondition(
+          () => result !== undefined && fixture.events.some(({ type }) => type === 'run_finished'),
+          `burst runner did not finish after ${outcome}`,
+        );
+
         expect(result).toEqual({ accepted: true, reason: outcome });
         expect(started).toEqual(['s1']);
         expect(fixture.events.filter(({ type }) => type === 'shot_released').map(({ payload }) => payload.shotId)).toEqual(['s1']);
         expect(runner.snapshot().map(({ state }) => state)).toEqual(['settled', 'returned']);
       } finally {
+        firstShot.resolve({ outcome });
         futureSlot.resolve();
         await running;
       }
