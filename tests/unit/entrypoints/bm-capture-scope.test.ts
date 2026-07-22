@@ -760,20 +760,33 @@ describe('bm-capture.content.ts scope regression', () => {
     ['burst', 'PREFIRE_FIRE', { startMs: 9_100, reason: 'burst' }, 0],
   ])('exports configured preparation timing for a %s run', async (_mode, command, data, preparationLeadMs) => {
     let now = 1_000;
+    const capture = deferred<any>();
     const harness = createContentHarness({
+      capture: capture.promise,
       now: () => now,
       onPreparationReady: () => { now = 1_250; },
     });
     await harness.start();
-    await harness.command(command, data);
+    const preparing = harness.command(command, data);
+    now = 1_200;
+    capture.resolve({
+      platform: 'bigmodel',
+      capturedAt: 1_000,
+      headers: { authorization: 'token', 'bigmodel-organization': 'org', 'bigmodel-project': 'project' },
+      metadata: { source: 'live-page' },
+    });
+    await preparing;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    const preparation = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
     const exporter = createMainLogExportHarness();
     exporter.ingest(harness.posted);
     const report = await exporter.exportLog();
     const run = (report.runs as Array<Record<string, unknown>>).find((record) => record.mode === _mode);
+    expect(preparation?.data).toMatchObject({ wallClockMs: 1_000 });
     expect(run).toMatchObject({
       preparationLeadMs,
+      preparationStartedAt: 1_000,
       preparationDurationMs: 250,
     });
   });

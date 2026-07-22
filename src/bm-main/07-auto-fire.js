@@ -56,9 +56,8 @@ function scheduleAutoFire(nextSaleTime) {
   var PREPARATION_LEAD_MS = 3000;
   // targetMs is server-aligned. Convert the compensated first-fetch target to
   // local epoch once, then schedule preparation separately from the first slot.
-  // RTT is a round trip; use a one-way estimate instead of firing a full RTT early.
-  var oneWayLatencyMs = Math.round(Math.max(0, _rt.latencyMs) / 2);
-  var fireStartMs = nextSaleTime - oneWayLatencyMs - EARLY_MS - _rt.clockOffsetMs;
+  var rttCompensationMs = Math.round(Math.max(0, _rt.latencyMs));
+  var fireStartMs = nextSaleTime - rttCompensationMs - EARLY_MS - _rt.clockOffsetMs;
   var prepareAtMs = fireStartMs - PREPARATION_LEAD_MS;
   var delay = prepareAtMs - Date.now();
 
@@ -105,13 +104,15 @@ function dispatchAutoFire() {
   if (lg) lg.innerHTML += '> Auto-fire dispatched @ ' + ts + '<br>';
   // Preparation is dispatched before the first fetch slot. The content script
   // uses fireStartMs for FireRunner, never the preparation timestamp.
+  var rttCompensationMs = Math.round(Math.max(0, _rt.latencyMs));
+  var fireStartMs = _rt.nextSaleTime - rttCompensationMs - EARLY_MS - _rt.clockOffsetMs;
   window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_PREPARE', data: {
     targetMs: _rt.nextSaleTime,
     preparationLeadMs: 3000,
-    prepareAtMs: _rt.nextSaleTime - Math.round(Math.max(0, _rt.latencyMs) / 2) - EARLY_MS - _rt.clockOffsetMs - 3000,
-    fireStartMs: _rt.nextSaleTime - Math.round(Math.max(0, _rt.latencyMs) / 2) - EARLY_MS - _rt.clockOffsetMs,
-    startMs: _rt.nextSaleTime - Math.round(Math.max(0, _rt.latencyMs) / 2) - EARLY_MS - _rt.clockOffsetMs,
-    rttCompensationMs: Math.round(Math.max(0, _rt.latencyMs) / 2),
+    prepareAtMs: fireStartMs - 3000,
+    fireStartMs: fireStartMs,
+    startMs: fireStartMs,
+    rttCompensationMs: rttCompensationMs,
     clockOffsetMs: _rt.clockOffsetMs,
     earlyOffsetMs: EARLY_MS,
     reason: 'auto'

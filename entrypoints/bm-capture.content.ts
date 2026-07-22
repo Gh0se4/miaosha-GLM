@@ -932,6 +932,7 @@ export default defineContentScript({
       preparationCancellation?: FirePreparationCancellation,
       runId?: string,
       autoTiming?: AutoTimingMetadata,
+      preparationStartedAt?: number,
     ) {
       // Auto mode uses the same explicit runner lifecycle as manual mode.
       if (preparationCancellation?.cancelled) return;
@@ -943,6 +944,7 @@ export default defineContentScript({
         authArg,
         preparationCancellation,
         autoTiming,
+        preparationStartedAt,
       });
     }
 
@@ -963,6 +965,7 @@ export default defineContentScript({
       pollPayment: boolean;
       preparationCancellation?: FirePreparationCancellation;
       autoTiming?: AutoTimingMetadata;
+      preparationStartedAt?: number;
     }
 
     interface AutoTimingMetadata {
@@ -979,7 +982,7 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
         return;
       }
-      const preparationStartedAt = Date.now();
+      const preparationStartedAt = options.preparationStartedAt ?? Date.now();
       preparingFireRun = true;
       const preparationCancellation = options.preparationCancellation ?? createFirePreparationCancellation();
       const runId = options.runId || `${options.mode}-${Date.now()}`;
@@ -1420,6 +1423,7 @@ export default defineContentScript({
       authArg?: any;
       preparationCancellation?: FirePreparationCancellation;
       autoTiming?: AutoTimingMetadata;
+      preparationStartedAt?: number;
       triggerSource?: 'manual' | 'burst' | 'auto';
     }) {
       const mode = input.mode;
@@ -1434,25 +1438,26 @@ export default defineContentScript({
         pollPayment: true,
         preparationCancellation: input.preparationCancellation,
         autoTiming: input.autoTiming,
+        preparationStartedAt: input.preparationStartedAt,
       });
     }
 
-    async function strike(startMs: number, authOverride?: any) {
+    async function strike(startMs: number, authOverride?: any, preparationStartedAt?: number) {
       const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
       if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', triggerSource: 'manual', startMs, authArg: auth });
+      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', triggerSource: 'manual', startMs, authArg: auth, preparationStartedAt });
     }
 
-    async function burstStrike(startMs: number, authOverride?: any) {
+    async function burstStrike(startMs: number, authOverride?: any, preparationStartedAt?: number) {
       const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
       if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', triggerSource: 'burst', startMs, authArg: auth });
+      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', triggerSource: 'burst', startMs, authArg: auth, preparationStartedAt });
     }
 
     async function prefireAndBurst(
@@ -1461,7 +1466,9 @@ export default defineContentScript({
       preparationCancellation?: FirePreparationCancellation,
       runId?: string,
       autoTiming?: AutoTimingMetadata,
+      preparationStartedAt?: number,
     ) {
+      const startedAt = preparationStartedAt ?? Date.now();
       const reportPrefireCancelled = () => {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
       };
@@ -1512,16 +1519,16 @@ export default defineContentScript({
       }
 
       if (reason === 'auto') {
-        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation, runId, autoTiming);
+        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation, runId, autoTiming, startedAt);
         return;
       }
 
       if (reason === 'burst' || reason === 'batch-burst') {
-        await burstStrike(startMs, authStatus.headers);
+        await burstStrike(startMs, authStatus.headers, startedAt);
         return;
       }
 
-      await strike(startMs, authStatus.headers);
+      await strike(startMs, authStatus.headers, startedAt);
       } finally {
         finishPrefireCancellation();
       }
@@ -1538,13 +1545,15 @@ export default defineContentScript({
           postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
         }
         if (event.data.type === 'PREFIRE_FIRE') {
-          const startMs: number = (event.data.data?.startMs) ?? Date.now();
+          const preparationStartedAt = Date.now();
+          const startMs: number = (event.data.data?.startMs) ?? preparationStartedAt;
           const reason: string = event.data.data?.reason ?? 'prefire-fire';
-          prefireAndBurst(startMs, reason);
+          prefireAndBurst(startMs, reason, undefined, undefined, undefined, preparationStartedAt);
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
+          const preparationStartedAt = Date.now();
           const prefireData = event.data.data || {};
-          const fireStartMs: number = prefireData.fireStartMs ?? prefireData.startMs ?? Date.now();
+          const fireStartMs: number = prefireData.fireStartMs ?? prefireData.startMs ?? preparationStartedAt;
           if (currentFirePreparationCancellation || preparingFireRun || currentFireRunner) {
             postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
             return;
@@ -1559,7 +1568,7 @@ export default defineContentScript({
             clockOffsetMs: Number(prefireData.clockOffsetMs ?? 0),
             earlyOffsetMs: Number(prefireData.earlyOffsetMs ?? 0),
           };
-          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation, runId, autoTiming);
+          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation, runId, autoTiming, preparationStartedAt);
         }
         if (event.data.type === 'CANCEL_FIRE') {
           currentFirePreparationCancellation?.cancel();

@@ -58,14 +58,14 @@ describe('auto fire prepare-run lifecycle', () => {
     const api = vm.runInNewContext(`${AUTO_SOURCE}; ({ scheduleAutoFire })`, context) as { scheduleAutoFire(nextSaleTime: number): void };
 
     api.scheduleAutoFire(10_000);
-    expect(timers[0]?.delay).toBe(5_440);
+    expect(timers[0]?.delay).toBe(5_090);
     timers[0]?.callback();
     expect(messages).toEqual([{
       __cmd: true,
       type: 'PREFIRE_PREPARE',
       data: expect.objectContaining({
-        prepareAtMs: 6_440, fireStartMs: 9_440, startMs: 9_440,
-        preparationLeadMs: 3_000, earlyOffsetMs: 10,
+        prepareAtMs: 6_090, fireStartMs: 9_090, startMs: 9_090,
+        preparationLeadMs: 3_000, rttCompensationMs: 700, earlyOffsetMs: 10,
       }),
     }]);
   });
