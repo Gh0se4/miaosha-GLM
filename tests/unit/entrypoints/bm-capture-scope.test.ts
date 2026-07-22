@@ -74,6 +74,8 @@ function createContentHarness(options: {
   const listeners: Array<(event: any) => unknown> = [];
   const posted: any[] = [];
   const runnerEvents: string[] = [];
+  const runnerSlotShotIds: string[] = [];
+  const fireRequestShotIds: string[] = [];
   let pollCalls = 0;
   let runnerCount = 0;
   let calibrationCalls = 0;
@@ -160,7 +162,11 @@ function createContentHarness(options: {
     if (id.includes('fire-runner')) return {
       FireRunner: class {
         input: any;
-        constructor(input: any) { this.input = input; runnerCount++; }
+        constructor(input: any) {
+          this.input = input;
+          runnerCount++;
+          runnerSlotShotIds.push(...input.slots.map((slot: any) => slot.shotId));
+        }
         cancel() {}
         async run() {
           this.input.onEvent({ type: 'tickets_reserved', payload: {} });
@@ -219,6 +225,7 @@ function createContentHarness(options: {
       bigmodelAdapter: {
         authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
         orderPipeline: { run: async (_ctx: any, _auth: any, fireRequest: any) => {
+          fireRequestShotIds.push(fireRequest.shotId);
           const orderResult = options.orderResults?.[orderResultIndex++] ?? options.orderResult;
           const resultTiming = orderResult?.metadata?.transport?.timing;
           fireRequest?.onFetchStarted?.({
@@ -274,6 +281,8 @@ function createContentHarness(options: {
   return {
     posted,
     runnerEvents,
+    runnerSlotShotIds,
+    fireRequestShotIds,
     get pollCalls() { return pollCalls; },
     get runnerCount() { return runnerCount; },
     get calibrationCalls() { return calibrationCalls; },
@@ -644,6 +653,43 @@ describe('bm-capture.content.ts scope regression', () => {
     const report = await main.exportLog() as { shots: Array<Record<string, string>> };
     expect(report.shots).toHaveLength(1);
     expect(report.shots.every((shot) => shot.shotId === `${shot.runId}:shot-0`)).toBe(true);
+  });
+
+  it('uses one canonical run-scoped shot identifier through scheduling, lifecycle, transport, and export', async () => {
+    let now = 20_000;
+    const content = createContentHarness({ now: () => now++ });
+    const main = createMainLogExportHarness();
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    main.ingest(content.posted);
+
+    const shotResult = content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data;
+    const released = content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'shot_released')?.data;
+    const expectedShotId = `${shotResult.runId}:shot-0`;
+    const report = await main.exportLog() as { shots: Array<Record<string, string>> };
+
+    expect(content.runnerSlotShotIds).toEqual([expectedShotId]);
+    expect(content.fireRequestShotIds).toEqual([expectedShotId]);
+    expect(released?.shotId).toBe(expectedShotId);
+    expect(shotResult.shotId).toBe(expectedShotId);
+    expect(report.shots[0]?.shotId).toBe(expectedShotId);
+  });
+
+  it('keeps scheduler shot identifiers unique across runs', async () => {
+    let now = 30_000;
+    const content = createContentHarness({ now: () => now++, returnedTicketCounts: [1] });
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await content.command('PREFIRE_FIRE', { startMs: 2_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(content.runnerSlotShotIds).toHaveLength(2);
+    expect(new Set(content.runnerSlotShotIds).size).toBe(2);
+    expect(content.runnerSlotShotIds.every((shotId) => /^manual-\d+:shot-0$/.test(shotId))).toBe(true);
   });
 
   it('emits run-scoped identifiers for cancelled tickets returned to the V2 log', async () => {

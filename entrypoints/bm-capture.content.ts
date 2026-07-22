@@ -1155,21 +1155,22 @@ export default defineContentScript({
       };
 
       const total = plan.shots.length;
+      const shotIds = plan.shots.map((_shot, index) => `${runId}:shot-${index}`);
       let ticketReturnCount = 0;
       const returnedShotIds = new Set<string>();
       const releasedAtByShot = new Map<string, number>();
       const fetchCalledAtByShot = new Map<string, number>();
-      const logShotId = (idx: number) => `${runId}:shot-${idx}`;
       const buildShotLog = (shot: StrikeShot, idx: number, outcome: string, rtt: number, sentAt: number, result?: any, extra: Record<string, unknown> = {}) => {
+        const shotId = shotIds[idx];
         const transport = result?.metadata?.transport || {};
         const timing = transport.timing || extra.timing;
         const plannedAt = startMs + idx * intervalMs;
         const fetchCalledAt = timing?.fetchCalledAt;
-        const releasedAt = releasedAtByShot.get(`shot-${idx}`);
+        const releasedAt = releasedAtByShot.get(shotId);
         const actualStartAt = typeof fetchCalledAt === 'number' ? fetchCalledAt : releasedAt;
         let previousFetchCalledAt: number | undefined;
         for (let previousIndex = idx - 1; previousIndex >= 0; previousIndex--) {
-          const previous = fetchCalledAtByShot.get(`shot-${previousIndex}`);
+          const previous = fetchCalledAtByShot.get(shotIds[previousIndex]);
           if (typeof previous === 'number') {
             previousFetchCalledAt = previous;
             break;
@@ -1196,7 +1197,7 @@ export default defineContentScript({
           headers: transport.headers || {}, body: transport.body || '', status: transport.status, statusText: transport.statusText,
         };
         return {
-          runId, shotId: logShotId(idx), shotIdx: idx, productId: shot.productId, priority: shot.priority,
+          runId, shotId, shotIdx: idx, productId: shot.productId, priority: shot.priority,
           ticket: shot.ticket, randstr: shot.randstr, ticketMask: maskTicket(shot.ticket),
           requestSeq: idx, plannedAt, outcome, rtt, sentAt,
           releasedAt, mode: options.mode,
@@ -1209,6 +1210,7 @@ export default defineContentScript({
 
       const fireOne = async (shot: StrikeShot, idx: number, fireRequest: { requestId: string; onFetchStarted(meta?: { fetchStartedAt?: number; [key: string]: unknown }): void; setAbort(abort: () => void): void }): Promise<string> => {
         if (cancelled) return 'cancelled';
+        const shotId = shotIds[idx];
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
         let fetchTiming: MainWorldFetchStartedTiming | undefined;
@@ -1229,7 +1231,7 @@ export default defineContentScript({
             cancel: { reason: 'user_cancelled_after_fetch_started', cancelledAt: Date.now() },
           });
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-            type: 'fetch_aborted', runId, shotId: logShotId(idx), requestSeq: idx,
+            type: 'fetch_aborted', runId, shotId, requestSeq: idx,
             plannedAt: cancelledShot.plannedAt, timing: cancelledShot.timing,
             shot: cancelledShot,
           } });
@@ -1242,10 +1244,10 @@ export default defineContentScript({
           }, auth, {
             requestId: fireRequest.requestId,
             runId,
-            shotId: logShotId(idx),
+            shotId,
             onFetchStarted: ({ timing, requestId }: { timing: MainWorldFetchStartedTiming; requestId: string }) => {
               fetchTiming = timing;
-              fetchCalledAtByShot.set(`shot-${idx}`, timing.fetchCalledAt);
+              fetchCalledAtByShot.set(shotId, timing.fetchCalledAt);
               fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId });
             },
             onAbortReady: fireRequest.setAbort,
@@ -1270,7 +1272,7 @@ export default defineContentScript({
               timeout: { timeoutMs: 8000, timedOutAt: Date.now() },
             });
             postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-              type: 'fetch_timed_out', runId, shotId: logShotId(idx), requestSeq: idx,
+              type: 'fetch_timed_out', runId, shotId, requestSeq: idx,
               plannedAt: timeoutShot.plannedAt, timing: timeoutShot.timing, shot: timeoutShot,
             } });
             return 'neterr';
@@ -1365,12 +1367,12 @@ export default defineContentScript({
         startMs,
         intervalMs,
         shots: plan.shots.map((shot, index) => ({
-          shotId: `shot-${index}`,
+          shotId: shotIds[index],
           productId: shot.productId,
           productPriority: shot.priority,
         })),
       });
-      const shotsById = new Map(schedule.slots.map((slot, index) => [slot.shotId, plan.shots[index]]));
+      const shotsById = new Map(shotIds.map((shotId, index) => [shotId, plan.shots[index]]));
       runner = new FireRunner({
         ...schedule,
         maxInFlight,
@@ -1386,12 +1388,6 @@ export default defineContentScript({
             ticketReturnCount = returnedShotIds.size;
           }
           const logPayload = { ...event.payload };
-          if (typeof logPayload.shotId === 'string') logPayload.shotId = `${runId}:${logPayload.shotId}`;
-          if (Array.isArray(logPayload.shotIds)) logPayload.shotIds = logPayload.shotIds.map((shotId: string) => `${runId}:${shotId}`);
-          if (Array.isArray(logPayload.shots)) logPayload.shots = logPayload.shots.map((shot: any) => ({
-            ...shot,
-            ...(typeof shot?.shotId === 'string' ? { shotId: `${runId}:${shot.shotId}` } : {}),
-          }));
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
             type: event.type,
             ...logPayload,
