@@ -1,8 +1,11 @@
-export interface MainWorldTransportTiming {
+export interface MainWorldFetchStartedTiming {
   bridgeReceivedAt: number;
   bridgeReceivedPerfMs: number;
   fetchCalledAt: number;
   fetchCalledPerfMs: number;
+}
+
+export interface MainWorldTransportTiming extends MainWorldFetchStartedTiming {
   responseHeadersAt: number;
   bodyCompletedAt: number;
 }
@@ -16,7 +19,7 @@ export interface XhrRequestOptions {
   requestId?: string;
   runId?: string;
   shotId?: string;
-  onFetchStarted?: (meta: { timing: MainWorldTransportTiming; requestId: string }) => void;
+  onFetchStarted?: (meta: { timing: MainWorldFetchStartedTiming; requestId: string }) => void;
   onAbortReady?: (abort: () => void) => void;
 }
 

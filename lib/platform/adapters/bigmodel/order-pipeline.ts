@@ -6,13 +6,13 @@ import type {
   PlatformAuth,
 } from '../../types';
 import { isBigmodelAuthValid } from './auth-probe';
-import { xhrRequest, type MainWorldTransportTiming } from './request';
+import { xhrRequest, type MainWorldFetchStartedTiming } from './request';
 
 export interface BigmodelFireRequestContext {
   requestId: string;
   runId: string;
   shotId: string;
-  onFetchStarted(meta: { timing: MainWorldTransportTiming; requestId: string }): void;
+  onFetchStarted(meta: { timing: MainWorldFetchStartedTiming; requestId: string }): void;
   onAbortReady(abort: () => void): void;
 }
 

@@ -5,6 +5,24 @@ import { describe, expect, it, vi } from 'vitest';
 
 type Message = Record<string, unknown>;
 
+interface BridgeTiming {
+  bridgeReceivedAt: number;
+  bridgeReceivedPerfMs: number;
+}
+
+interface StartedTiming extends BridgeTiming {
+  fetchCalledAt: number;
+  fetchCalledPerfMs: number;
+}
+
+interface HeadersTiming extends StartedTiming {
+  responseHeadersAt: number;
+}
+
+interface CompleteTiming extends HeadersTiming {
+  bodyCompletedAt: number;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -50,10 +68,49 @@ async function flush() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function expectBridgeTiming(timing: unknown): asserts timing is BridgeTiming {
+  expect(timing).toEqual({
+    bridgeReceivedAt: expect.any(Number),
+    bridgeReceivedPerfMs: expect.any(Number),
+  });
+}
+
+function expectStartedTiming(timing: unknown): asserts timing is StartedTiming {
+  expect(timing).toEqual({
+    bridgeReceivedAt: expect.any(Number),
+    bridgeReceivedPerfMs: expect.any(Number),
+    fetchCalledAt: expect.any(Number),
+    fetchCalledPerfMs: expect.any(Number),
+  });
+}
+
+function expectHeadersTiming(timing: unknown): asserts timing is HeadersTiming {
+  expect(timing).toEqual({
+    bridgeReceivedAt: expect.any(Number),
+    bridgeReceivedPerfMs: expect.any(Number),
+    fetchCalledAt: expect.any(Number),
+    fetchCalledPerfMs: expect.any(Number),
+    responseHeadersAt: expect.any(Number),
+  });
+}
+
+function expectCompleteTiming(timing: unknown): asserts timing is CompleteTiming {
+  expect(timing).toEqual({
+    bridgeReceivedAt: expect.any(Number),
+    bridgeReceivedPerfMs: expect.any(Number),
+    fetchCalledAt: expect.any(Number),
+    fetchCalledPerfMs: expect.any(Number),
+    responseHeadersAt: expect.any(Number),
+    bodyCompletedAt: expect.any(Number),
+  });
 }
 
 describe('MAIN world fetch bridge protocol', () => {
-  it('posts STARTED before RESULT with monotonic complete timing and preserved metadata', async () => {
+  it('posts STARTED with observed start timing before a complete RESULT and preserves metadata', async () => {
     const fetch = vi.fn().mockResolvedValue({
       status: 201,
       statusText: 'Created',
@@ -69,22 +126,12 @@ describe('MAIN world fetch bridge protocol', () => {
     const [started, result] = bridge.posted;
     expect(started).toMatchObject({ __evt: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1' });
     expect(result).toMatchObject({ __evt: true, ok: true, requestId: 'request-1', runId: 'run-1', shotId: 'shot-1', status: 201, statusText: 'Created', body: '{"ok":true}', headers: { 'x-trace': 'trace-1' } });
-    const assertCompleteTiming = (timing: Record<string, number>) => {
-      expect(timing).toMatchObject({
-      bridgeReceivedAt: expect.any(Number),
-      bridgeReceivedPerfMs: expect.any(Number),
-      fetchCalledAt: expect.any(Number),
-      fetchCalledPerfMs: expect.any(Number),
-      responseHeadersAt: expect.any(Number),
-      bodyCompletedAt: expect.any(Number),
-      });
-      expect(timing.bridgeReceivedAt).toBeLessThanOrEqual(timing.fetchCalledAt);
-      expect(timing.fetchCalledAt).toBeLessThanOrEqual(timing.responseHeadersAt);
-      expect(timing.responseHeadersAt).toBeLessThanOrEqual(timing.bodyCompletedAt);
-      expect(timing.bridgeReceivedPerfMs).toBeLessThanOrEqual(timing.fetchCalledPerfMs);
-    };
-    assertCompleteTiming(started.timing as Record<string, number>);
-    assertCompleteTiming(result.timing as Record<string, number>);
+    expectStartedTiming(started.timing);
+    expectCompleteTiming(result.timing);
+    expect(result.timing.bridgeReceivedAt).toBeLessThanOrEqual(result.timing.fetchCalledAt);
+    expect(result.timing.fetchCalledAt).toBeLessThanOrEqual(result.timing.responseHeadersAt);
+    expect(result.timing.responseHeadersAt).toBeLessThanOrEqual(result.timing.bodyCompletedAt);
+    expect(result.timing.bridgeReceivedPerfMs).toBeLessThanOrEqual(result.timing.fetchCalledPerfMs);
   });
 
   it('preserves reqId alongside requestId for legacy callers', async () => {
@@ -123,7 +170,7 @@ describe('MAIN world fetch bridge protocol', () => {
     await flush();
     expect(bridge.posted).toHaveLength(1);
     expect(bridge.posted[0]).toMatchObject({ type: 'DO_FETCH_RESULT', ok: false, status: 0, statusText: '', headers: {}, body: '' });
-    expect(bridge.posted[0].timing).toMatchObject({ responseHeadersAt: expect.any(Number), bodyCompletedAt: expect.any(Number) });
+    expectStartedTiming(bridge.posted[0].timing);
 
     bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'started-after-fetch', opts: { url: 'https://bigmodel.cn/api/test' } });
     await flush();
@@ -156,6 +203,51 @@ describe('MAIN world fetch bridge protocol', () => {
     expect(bridge.posted).toEqual([
       expect.objectContaining({ type: 'DO_FETCH_RESULT', ok: false, error: 'invalid requestId', requestId: null, reqId: null }),
     ]);
+    expectBridgeTiming(bridge.posted[0].timing);
+  });
+
+  it('rejects a blocked URL without recording fetch or response timing', () => {
+    const fetch = vi.fn();
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'blocked-1', opts: { url: 'https://example.com/api/test' } });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(bridge.posted).toEqual([
+      expect.objectContaining({ type: 'DO_FETCH_RESULT', ok: false, error: 'blocked', requestId: 'blocked-1', reqId: 'blocked-1' }),
+    ]);
+    expectBridgeTiming(bridge.posted[0].timing);
+  });
+
+  it('records fetch timing but no response timing when fetch rejects', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error('network failure'));
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'reject-1', opts: { url: 'https://bigmodel.cn/api/test' } });
+    await flush();
+
+    expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
+    expectStartedTiming(bridge.posted[0].timing);
+    expect(bridge.posted[1]).toMatchObject({ ok: false, error: 'network failure' });
+    expectStartedTiming(bridge.posted[1].timing);
+  });
+
+  it('records response headers but no body completion when reading the body fails', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      statusText: 'OK',
+      headers: new Map(),
+      text: () => Promise.reject(new Error('body failure')),
+    });
+    const bridge = loadBridge(fetch);
+
+    bridge.dispatch({ __cmd: true, type: 'DO_FETCH', requestId: 'body-fail-1', opts: { url: 'https://bigmodel.cn/api/test' } });
+    await flush();
+
+    expect(bridge.posted.map((message) => message.type)).toEqual(['DO_FETCH_STARTED', 'DO_FETCH_RESULT']);
+    expectStartedTiming(bridge.posted[0].timing);
+    expect(bridge.posted[1]).toMatchObject({ ok: false, error: 'body failure' });
+    expectHeadersTiming(bridge.posted[1].timing);
   });
 
   it('aborts a matching request and suppresses its late result', async () => {

@@ -16,7 +16,7 @@ import { bigmodelAdapter } from '../lib/platform';
 import type { PlatformAuth } from '../lib/platform';
 import { classifyPreviewError, classifyPreviewNetworkError, type ClassifiedShotResult } from '../lib/platform/adapters/bigmodel/order-pipeline';
 import { createAuthStore } from '../lib/platform/shared/stores';
-import { xhrRequest, setMainWorldFetcher, toMainWorldFetchOptions, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
+import { xhrRequest, setMainWorldFetcher, toMainWorldFetchOptions, type MainWorldFetchStartedTiming, type MainWorldTransportTiming, type XhrRequestOptions, type XhrResponse } from '../lib/platform/adapters/bigmodel/request';
 
 const RUNTIME_CALIBRATION_KEY = 'local:runtimeCalibration';
 type StorageKey = `${'local' | 'session' | 'sync' | 'managed'}:${string}`;
@@ -1173,7 +1173,7 @@ export default defineContentScript({
         if (cancelled) return 'cancelled';
         const tag = '>[#' + (idx + 1) + '/' + total + '][P' + shot.priority + '] ' + shot.productId.slice(-6);
         const t1 = Date.now();
-        let fetchTiming: MainWorldTransportTiming | undefined;
+        let fetchTiming: MainWorldFetchStartedTiming | undefined;
         const persistCancelledStartedShot = (result?: any) => {
           if (!fetchTiming) return;
           const cancelledShot = buildShotLog(shot, idx, 'cancelled', Date.now() - t1, t1, result, {
@@ -1205,7 +1205,7 @@ export default defineContentScript({
             requestId: fireRequest.requestId,
             runId,
             shotId: logShotId(idx),
-            onFetchStarted: ({ timing, requestId }: { timing: MainWorldTransportTiming; requestId: string }) => {
+            onFetchStarted: ({ timing, requestId }: { timing: MainWorldFetchStartedTiming; requestId: string }) => {
               fetchTiming = timing;
               fetchCalledAtByShot.set(`shot-${idx}`, timing.fetchCalledAt);
               fireRequest.onFetchStarted({ fetchStartedAt: timing.fetchCalledAt, timing, requestId });

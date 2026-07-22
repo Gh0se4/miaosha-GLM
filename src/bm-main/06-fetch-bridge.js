@@ -42,10 +42,6 @@ window.addEventListener('message', function(ev) {
     bridgeReceivedAt: Date.now(),
     bridgeReceivedPerfMs: performance.now(),
   };
-  timing.fetchCalledAt = timing.bridgeReceivedAt;
-  timing.fetchCalledPerfMs = timing.bridgeReceivedPerfMs;
-  timing.responseHeadersAt = timing.fetchCalledAt;
-  timing.bodyCompletedAt = timing.fetchCalledAt;
   var common = { requestId: requestId, reqId: requestId, runId: d.runId, shotId: d.shotId };
   if (typeof requestId !== 'string' || !requestId) {
     postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload({ requestId: null, reqId: null }, timing, 'invalid requestId'));
@@ -79,12 +75,10 @@ window.addEventListener('message', function(ev) {
   headers['sec-ch-ua-mobile'] = '?0';
   headers['sec-ch-ua-platform'] = '"macOS"';
 
-  timing.fetchCalledAt = Date.now();
-  timing.fetchCalledPerfMs = performance.now();
-  timing.responseHeadersAt = timing.fetchCalledAt;
-  timing.bodyCompletedAt = timing.fetchCalledAt;
   var fetchPromise;
   try {
+    timing.fetchCalledAt = Date.now();
+    timing.fetchCalledPerfMs = performance.now();
     fetchPromise = window.fetch(opts.url, {
       method: opts.method || 'GET',
       headers: headers,
