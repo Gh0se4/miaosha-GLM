@@ -68,6 +68,7 @@ function createContentHarness(options: {
   burstIntervalMs?: number;
   returnedTicketCounts?: number[];
   now?: () => number;
+  monotonicNow?: () => number;
   onPreparationReady?: () => void;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
@@ -256,6 +257,7 @@ function createContentHarness(options: {
     chrome,
     console,
     Date: options.now ? class extends Date { static now() { return options.now!(); } } : Date,
+    performance: { now: () => options.monotonicNow?.() ?? options.now?.() ?? 1 },
     Promise,
     Map,
     Set,
@@ -789,6 +791,40 @@ describe('bm-capture.content.ts scope regression', () => {
       preparationStartedAt: 1_000,
       preparationDurationMs: 250,
     });
+  });
+
+  it('uses the command-entry clocks when the wall clock changes during auth preparation', async () => {
+    let wallClockMs = 1_000;
+    let monotonicMs = 100;
+    const capture = deferred<any>();
+    const harness = createContentHarness({
+      capture: capture.promise,
+      now: () => wallClockMs,
+      monotonicNow: () => monotonicMs,
+      onPreparationReady: () => {
+        wallClockMs = 850;
+        monotonicMs = 350;
+      },
+    });
+    await harness.start();
+
+    const preparing = harness.command('PREFIRE_PREPARE', { fireStartMs: 9_100 });
+    wallClockMs = 800;
+    monotonicMs = 300;
+    capture.resolve({
+      platform: 'bigmodel',
+      capturedAt: 1_000,
+      headers: { authorization: 'token', 'bigmodel-organization': 'org', 'bigmodel-project': 'project' },
+      metadata: { source: 'live-page' },
+    });
+    await preparing;
+
+    const preparations = harness.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    const run = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_RUN' && message.data?.mode === 'auto');
+    expect(preparations).toHaveLength(1);
+    expect(preparations[0].data).toMatchObject({ wallClockMs: 1_000, monotonicMs: 100 });
+    expect(Number.isFinite(run?.data?.preparationDurationMs)).toBe(true);
+    expect(run?.data).toMatchObject({ preparationStartedAt: 1_000, preparationDurationMs: 250 });
   });
 
   it('records a timed-out started request as a V2 timeout shot', async () => {

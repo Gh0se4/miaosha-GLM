@@ -932,7 +932,7 @@ export default defineContentScript({
       preparationCancellation?: FirePreparationCancellation,
       runId?: string,
       autoTiming?: AutoTimingMetadata,
-      preparationStartedAt?: number,
+      preparationStartTiming?: PreparationStartTiming,
     ) {
       // Auto mode uses the same explicit runner lifecycle as manual mode.
       if (preparationCancellation?.cancelled) return;
@@ -944,7 +944,7 @@ export default defineContentScript({
         authArg,
         preparationCancellation,
         autoTiming,
-        preparationStartedAt,
+        preparationStartTiming,
       });
     }
 
@@ -965,7 +965,7 @@ export default defineContentScript({
       pollPayment: boolean;
       preparationCancellation?: FirePreparationCancellation;
       autoTiming?: AutoTimingMetadata;
-      preparationStartedAt?: number;
+      preparationStartTiming?: PreparationStartTiming;
     }
 
     interface AutoTimingMetadata {
@@ -976,13 +976,46 @@ export default defineContentScript({
       earlyOffsetMs: number;
     }
 
+    interface PreparationStartTiming {
+      wallClockMs: number;
+      monotonicMs: number;
+    }
+
+    interface PrefireOptions {
+      preparationCancellation?: FirePreparationCancellation;
+      runId?: string;
+      autoTiming?: AutoTimingMetadata;
+      preparationStartTiming?: PreparationStartTiming;
+    }
+
+    function capturePreparationStartTiming(): PreparationStartTiming {
+      const wallClockCandidate = Date.now();
+      const wallClockMs = Number.isFinite(wallClockCandidate) ? wallClockCandidate : 0;
+      let monotonicMs = wallClockMs;
+      try {
+        const monotonicCandidate = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Number.NaN;
+        if (Number.isFinite(monotonicCandidate)) monotonicMs = monotonicCandidate;
+      } catch {}
+      return { wallClockMs, monotonicMs };
+    }
+
+    function calculatePreparationDurationMs(start: PreparationStartTiming, prepared: PreparationStartTiming): number {
+      const monotonicDurationMs = prepared.monotonicMs - start.monotonicMs;
+      if (Number.isFinite(monotonicDurationMs) && monotonicDurationMs >= 0) return monotonicDurationMs;
+      const wallClockDurationMs = prepared.wallClockMs - start.wallClockMs;
+      if (Number.isFinite(wallClockDurationMs) && wallClockDurationMs >= 0) return wallClockDurationMs;
+      return 0;
+    }
+
     async function runStrikeSequence(startMs: number, authArg: any, options: StrikeSequenceOptions) {
       if (preparingFireRun || currentFireRunner) {
         postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: { type: 'run_rejected', runId: options.runId, reason: 'run_locked' } });
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
         return;
       }
-      const preparationStartedAt = options.preparationStartedAt ?? Date.now();
+      const preparationStartTiming = options.preparationStartTiming ?? capturePreparationStartTiming();
       preparingFireRun = true;
       const preparationCancellation = options.preparationCancellation ?? createFirePreparationCancellation();
       const runId = options.runId || `${options.mode}-${Date.now()}`;
@@ -1002,8 +1035,9 @@ export default defineContentScript({
         return;
       }
       postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
-        type: 'run_prepare_started', runId, wallClockMs: preparationStartedAt,
-        monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
+        type: 'run_prepare_started', runId,
+        wallClockMs: preparationStartTiming.wallClockMs,
+        monotonicMs: preparationStartTiming.monotonicMs,
         details: { mode: options.mode, startMs, ...(options.mode === 'auto' && options.autoTiming ? options.autoTiming : {}) },
       } });
       const auth = coerceToPlatformAuth(authArg);
@@ -1057,8 +1091,9 @@ export default defineContentScript({
       // Preparation spans the work from entering this lifecycle through the
       // point where its validated plan is ready to hand to FireRunner. It does
       // not include waiting for the first scheduled shot or request execution.
-      const preparedAt = Date.now();
-      const preparationDurationMs = Math.max(0, preparedAt - preparationStartedAt);
+      const preparedTiming = capturePreparationStartTiming();
+      const preparedAt = preparedTiming.wallClockMs;
+      const preparationDurationMs = calculatePreparationDurationMs(preparationStartTiming, preparedTiming);
       postToOverlay({
         type: 'FIRE_LOG_V2_RUN',
         data: {
@@ -1066,7 +1101,7 @@ export default defineContentScript({
           mode: options.mode,
           triggerSource: options.triggerSource,
           targetAt: startMs,
-          preparationStartedAt,
+          preparationStartedAt: preparationStartTiming.wallClockMs,
           preparedAt,
           preparationLeadMs: options.autoTiming?.preparationLeadMs ?? 0,
           preparationDurationMs,
@@ -1423,7 +1458,7 @@ export default defineContentScript({
       authArg?: any;
       preparationCancellation?: FirePreparationCancellation;
       autoTiming?: AutoTimingMetadata;
-      preparationStartedAt?: number;
+      preparationStartTiming?: PreparationStartTiming;
       triggerSource?: 'manual' | 'burst' | 'auto';
     }) {
       const mode = input.mode;
@@ -1438,37 +1473,39 @@ export default defineContentScript({
         pollPayment: true,
         preparationCancellation: input.preparationCancellation,
         autoTiming: input.autoTiming,
-        preparationStartedAt: input.preparationStartedAt,
+        preparationStartTiming: input.preparationStartTiming,
       });
     }
 
-    async function strike(startMs: number, authOverride?: any, preparationStartedAt?: number) {
+    async function strike(startMs: number, authOverride?: any, preparationStartTiming?: PreparationStartTiming) {
       const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
       if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', triggerSource: 'manual', startMs, authArg: auth, preparationStartedAt });
+      await prepareAndRun({ runId: `manual-${Date.now()}`, mode: 'manual', triggerSource: 'manual', startMs, authArg: auth, preparationStartTiming });
     }
 
-    async function burstStrike(startMs: number, authOverride?: any, preparationStartedAt?: number) {
+    async function burstStrike(startMs: number, authOverride?: any, preparationStartTiming?: PreparationStartTiming) {
       const auth = coerceToPlatformAuth(authOverride) || (await getFreshAuth());
       if (!auth || !(await bigmodelAdapter.authProbe.isAuthenticated(auth))) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> No auth headers' });
         return;
       }
-      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', triggerSource: 'burst', startMs, authArg: auth, preparationStartedAt });
+      await prepareAndRun({ runId: `burst-${Date.now()}`, mode: 'burst', triggerSource: 'burst', startMs, authArg: auth, preparationStartTiming });
     }
 
     async function prefireAndBurst(
       startMs: number,
       reason: string,
-      preparationCancellation?: FirePreparationCancellation,
-      runId?: string,
-      autoTiming?: AutoTimingMetadata,
-      preparationStartedAt?: number,
+      options: PrefireOptions = {},
     ) {
-      const startedAt = preparationStartedAt ?? Date.now();
+      const {
+        preparationCancellation,
+        runId,
+        autoTiming,
+        preparationStartTiming = capturePreparationStartTiming(),
+      } = options;
       const reportPrefireCancelled = () => {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — preparation stopped' });
       };
@@ -1519,16 +1556,16 @@ export default defineContentScript({
       }
 
       if (reason === 'auto') {
-        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation, runId, autoTiming, startedAt);
+        await runAutoFirePlan(startMs, authStatus.headers, preparationCancellation, runId, autoTiming, preparationStartTiming);
         return;
       }
 
       if (reason === 'burst' || reason === 'batch-burst') {
-        await burstStrike(startMs, authStatus.headers, startedAt);
+        await burstStrike(startMs, authStatus.headers, preparationStartTiming);
         return;
       }
 
-      await strike(startMs, authStatus.headers, startedAt);
+      await strike(startMs, authStatus.headers, preparationStartTiming);
       } finally {
         finishPrefireCancellation();
       }
@@ -1545,15 +1582,15 @@ export default defineContentScript({
           postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets });
         }
         if (event.data.type === 'PREFIRE_FIRE') {
-          const preparationStartedAt = Date.now();
-          const startMs: number = (event.data.data?.startMs) ?? preparationStartedAt;
+          const preparationStartTiming = capturePreparationStartTiming();
+          const startMs: number = (event.data.data?.startMs) ?? preparationStartTiming.wallClockMs;
           const reason: string = event.data.data?.reason ?? 'prefire-fire';
-          prefireAndBurst(startMs, reason, undefined, undefined, undefined, preparationStartedAt);
+          prefireAndBurst(startMs, reason, { preparationStartTiming });
         }
         if (event.data.type === 'PREFIRE_PREPARE') {
-          const preparationStartedAt = Date.now();
+          const preparationStartTiming = capturePreparationStartTiming();
           const prefireData = event.data.data || {};
-          const fireStartMs: number = prefireData.fireStartMs ?? prefireData.startMs ?? preparationStartedAt;
+          const fireStartMs: number = prefireData.fireStartMs ?? prefireData.startMs ?? preparationStartTiming.wallClockMs;
           if (currentFirePreparationCancellation || preparingFireRun || currentFireRunner) {
             postToOverlay({ type: 'FIRE_RESULT', line: '> Strike already in progress — wait for completion or cooldown' });
             return;
@@ -1568,7 +1605,12 @@ export default defineContentScript({
             clockOffsetMs: Number(prefireData.clockOffsetMs ?? 0),
             earlyOffsetMs: Number(prefireData.earlyOffsetMs ?? 0),
           };
-          await prefireAndBurst(fireStartMs, 'auto', preparationCancellation, runId, autoTiming, preparationStartedAt);
+          await prefireAndBurst(fireStartMs, 'auto', {
+            preparationCancellation,
+            runId,
+            autoTiming,
+            preparationStartTiming,
+          });
         }
         if (event.data.type === 'CANCEL_FIRE') {
           currentFirePreparationCancellation?.cancel();
