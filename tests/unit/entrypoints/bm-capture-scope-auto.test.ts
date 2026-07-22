@@ -13,6 +13,7 @@ type AutoTicketTimer = {
 function createAutoTicketHarness(options: {
   now: number;
   storage?: Map<string, string>;
+  markerWriteFails?: boolean;
 }) {
   let now = options.now;
   let nextTimerId = 1;
@@ -38,7 +39,11 @@ function createAutoTicketHarness(options: {
     location: { reload: () => { reloadCount++; actions.push('reload'); } },
     sessionStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => { storage.set(key, value); actions.push('storage:' + key); },
+      setItem: (key: string, value: string) => {
+        if (options.markerWriteFails) throw new Error('session storage denied');
+        storage.set(key, value);
+        actions.push('storage:' + key);
+      },
     },
     setTimeout: (callback: () => void, delay: number) => {
       const id = nextTimerId++;
@@ -242,6 +247,25 @@ describe('auto fire prepare-run lifecycle', () => {
         delayMs: followingSaleTime - 30 * 60 * 1_000 - refreshAt,
       },
     });
+  });
+
+  it('skips reload when the per-sale refresh marker cannot be persisted', () => {
+    const nextSaleTime = 5_000_000;
+    const refreshAt = nextSaleTime - 30 * 60 * 1_000;
+    const harness = createAutoTicketHarness({ now: refreshAt, markerWriteFails: true });
+
+    harness.api.scheduleAutoTicketWindow(nextSaleTime);
+    harness.advanceTo(refreshAt);
+
+    expect(harness.reloadCount).toBe(0);
+    expect(autoTicketDiagnostics(harness.messages)).toContainEqual({
+      type: 'refresh_skipped',
+      nextSaleTime,
+      timestamp: refreshAt,
+      reason: 'marker_persist_failed',
+      details: { refreshAt },
+    });
+    expect(autoTicketDiagnostics(harness.messages).some((event) => event.type === 'refresh_triggered')).toBe(false);
   });
 
   it('prepares three seconds before the compensated first-fetch time', async () => {

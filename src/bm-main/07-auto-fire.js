@@ -50,7 +50,15 @@ function scheduleAutoTicketWindow(nextSaleTime) {
     _autoTicketDiagnostic('refresh_scheduled', nextSaleTime, now, 'timer_scheduled', { refreshAt: refreshAt, delayMs: refreshDelay });
     _autoRefreshTimer = setTimeout(function() {
       _autoRefreshTimer = null;
-      try { sessionStorage.setItem(refreshKey, '1'); } catch (e) {}
+      var markerPersisted = false;
+      try {
+        sessionStorage.setItem(refreshKey, '1');
+        markerPersisted = sessionStorage.getItem(refreshKey) === '1';
+      } catch (e) {}
+      if (!markerPersisted) {
+        _autoTicketDiagnostic('refresh_skipped', nextSaleTime, Date.now(), 'marker_persist_failed', { refreshAt: refreshAt });
+        return;
+      }
       _autoTicketDiagnostic('refresh_triggered', nextSaleTime, Date.now(), 'timer_elapsed', { refreshAt: refreshAt });
       setTimeout(function() { location.reload(); }, 0);
     }, refreshDelay);
