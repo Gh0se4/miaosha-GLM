@@ -62,6 +62,10 @@ function toRunScopedShotId(runId: string, shotId: string): string {
   return shotId.startsWith(runPrefix) ? shotId : `${runPrefix}${shotId}`;
 }
 
+function toRequestId(runId: string, shotId: string, requestSeq: number): string {
+  return `${toRunScopedShotId(runId, shotId)}:${requestSeq}`;
+}
+
 export class FireRunner {
   private readonly now: () => number;
   private readonly waitUntil: (targetMs: number) => Promise<void>;
@@ -78,14 +82,27 @@ export class FireRunner {
   ) {
     this.now = dependencies.now ?? Date.now;
     this.waitUntil = dependencies.waitUntil ?? ((targetMs) => this.defaultWaitUntil(targetMs));
-    this.shots = input.slots.map((slot) => ({
-      shotId: slot.shotId,
-      productId: slot.productId,
-      requestSeq: slot.requestSeq,
-      ticketKey: toRunScopedShotId(input.runId, slot.shotId),
-      state: 'available',
-      plannedAt: slot.plannedAt,
-    }));
+    const ticketKeys = new Set<string>();
+    const requestSeqs = new Set<number>();
+    const requestIds = new Set<string>();
+    this.shots = input.slots.map((slot) => {
+      const ticketKey = toRunScopedShotId(input.runId, slot.shotId);
+      const requestId = toRequestId(input.runId, slot.shotId, slot.requestSeq);
+      if (requestIds.has(requestId)) throw new Error(`duplicate requestId "${requestId}"`);
+      if (ticketKeys.has(ticketKey)) throw new Error(`colliding ticketKey "${ticketKey}"`);
+      if (requestSeqs.has(slot.requestSeq)) throw new Error(`duplicate requestSeq ${slot.requestSeq}`);
+      requestIds.add(requestId);
+      ticketKeys.add(ticketKey);
+      requestSeqs.add(slot.requestSeq);
+      return {
+        shotId: slot.shotId,
+        productId: slot.productId,
+        requestSeq: slot.requestSeq,
+        ticketKey,
+        state: 'available' as const,
+        plannedAt: slot.plannedAt,
+      };
+    });
     this.cancelSignal = new Promise((resolve) => {
       this.cancelWake = resolve;
     });
@@ -197,7 +214,7 @@ export class FireRunner {
     outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
     fetchStartedAt?: number;
   }> {
-    const requestId = `${toRunScopedShotId(this.input.runId, shot.shotId)}:${shot.requestSeq}`;
+    const requestId = toRequestId(this.input.runId, shot.shotId, shot.requestSeq);
     let fetchStartedAt: number | undefined;
     const onFetchStarted = (meta: { fetchStartedAt?: number; [key: string]: unknown } = {}) => {
       if (shot.state !== 'released') return;

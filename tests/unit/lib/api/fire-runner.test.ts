@@ -88,6 +88,39 @@ describe('FireRunner', () => {
     });
   });
 
+  it('rejects local and canonical shot identifiers that collide after run scoping', () => {
+    const fixture = makeInput({
+      slots: [
+        { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+        { shotId: 'run-1:s1', productId: 'p2', productPriority: 1, requestSeq: 1, plannedAt: 0 },
+      ],
+    });
+
+    expect(() => new FireRunner(fixture.input)).toThrowError('colliding ticketKey "run-1:s1"');
+  });
+
+  it('rejects duplicate request sequences at construction', () => {
+    const fixture = makeInput({
+      slots: [
+        { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+        { shotId: 's2', productId: 'p2', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+      ],
+    });
+
+    expect(() => new FireRunner(fixture.input)).toThrowError('duplicate requestSeq 0');
+  });
+
+  it('rejects duplicate final request identifiers at construction', () => {
+    const fixture = makeInput({
+      slots: [
+        { shotId: 's1', productId: 'p1', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+        { shotId: 'run-1:s1', productId: 'p2', productPriority: 1, requestSeq: 0, plannedAt: 0 },
+      ],
+    });
+
+    expect(() => new FireRunner(fixture.input)).toThrowError('duplicate requestId "run-1:s1:0"');
+  });
+
   it('rejects a second run before it reserves or schedules tickets', async () => {
     const firstShot = deferred<{ outcome: Outcome }>();
     const first = makeInput({

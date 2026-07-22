@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
@@ -11,6 +11,14 @@ function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+async function waitForValue<T>(read: () => T | undefined, message: string): Promise<T> {
+  return vi.waitFor(() => {
+    const value = read();
+    if (value === undefined) throw new Error(message);
+    return value;
+  }, { interval: 1, timeout: 1_000 });
 }
 
 function createMainLogExportHarness() {
@@ -647,7 +655,10 @@ describe('bm-capture.content.ts scope regression', () => {
     await content.start();
 
     await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT'),
+      'manual shot result was not posted',
+    );
     main.ingest(content.posted);
 
     const report = await main.exportLog() as { shots: Array<Record<string, string>> };
@@ -662,11 +673,16 @@ describe('bm-capture.content.ts scope regression', () => {
     await content.start();
 
     await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const shotResult = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data,
+      'canonical shot result was not posted',
+    );
+    const released = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'shot_released')?.data,
+      'canonical shot release was not posted',
+    );
     main.ingest(content.posted);
 
-    const shotResult = content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data;
-    const released = content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'shot_released')?.data;
     const expectedShotId = `${shotResult.runId}:shot-0`;
     const report = await main.exportLog() as { shots: Array<Record<string, string>> };
 
@@ -683,9 +699,21 @@ describe('bm-capture.content.ts scope regression', () => {
     await content.start();
 
     await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForValue(
+      () => content.runnerSlotShotIds.length === 1
+        && content.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned').length === 1
+        ? true
+        : undefined,
+      'first run did not finish returning its ticket',
+    );
     await content.command('PREFIRE_FIRE', { startMs: 2_000, reason: 'manual' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForValue(
+      () => content.runnerSlotShotIds.length === 2
+        && content.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned').length === 2
+        ? true
+        : undefined,
+      'second run did not finish returning its ticket',
+    );
 
     expect(content.runnerSlotShotIds).toHaveLength(2);
     expect(new Set(content.runnerSlotShotIds).size).toBe(2);
@@ -696,10 +724,11 @@ describe('bm-capture.content.ts scope regression', () => {
     const content = createContentHarness({ returnedTicketCounts: [1] });
     await content.start();
     await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const returned = content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned')?.data;
-    expect(returned).toBeDefined();
+    const returned = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned')?.data,
+      'returned-ticket event was not posted',
+    );
     const expectedShotId = `${returned.runId}:shot-0`;
     expect(returned).toMatchObject({
       runId: expect.any(String),
@@ -778,8 +807,10 @@ describe('bm-capture.content.ts scope regression', () => {
     });
     await firing;
 
-    const aborted = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_aborted')?.data;
-    expect(aborted).toBeDefined();
+    const aborted = await waitForValue(
+      () => harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_aborted')?.data,
+      'fetch-aborted event was not posted',
+    );
     const expectedShotId = `${aborted.runId}:shot-0`;
     expect(aborted).toMatchObject({
       type: 'fetch_aborted', runId: expect.any(String), shotId: expectedShotId,
@@ -883,8 +914,10 @@ describe('bm-capture.content.ts scope regression', () => {
     await harness.start();
     await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
 
-    const timedOut = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_timed_out')?.data;
-    expect(timedOut).toBeDefined();
+    const timedOut = await waitForValue(
+      () => harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_timed_out')?.data,
+      'fetch-timeout event was not posted',
+    );
     const expectedShotId = `${timedOut.runId}:shot-0`;
     expect(timedOut).toMatchObject({
       type: 'fetch_timed_out', shotId: expectedShotId,
