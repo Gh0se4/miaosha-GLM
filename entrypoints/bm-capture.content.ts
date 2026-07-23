@@ -620,6 +620,7 @@ function mainWorldFetch(opts: XhrRequestOptions): Promise<{
       finish(() => reject(error));
     };
     opts.onAbortReady?.(abort);
+    if (settled) return;
     function handler(ev: MessageEvent) {
       const incomingRequestId = ev.data?.requestId ?? ev.data?.reqId;
       if (ev.source !== window || !ev.data?.[MSG_EVT] || incomingRequestId !== requestId) return;
@@ -1403,13 +1404,30 @@ export default defineContentScript({
             const releasedAt = Number(event.payload.releasedAt ?? event.payload.scheduledAt);
             if (Number.isFinite(releasedAt)) releasedAtByShot.set(event.payload.shotId, releasedAt);
           }
+          let restoredShotIds: string[] | undefined;
           if (event.type === 'tickets_returned') {
+            const now = Date.now();
+            restoredShotIds = [];
             for (const shotId of (event.payload.shotIds as string[]) || []) {
-              if (shotsById.has(shotId)) returnedShotIds.add(shotId);
+              const shot = shotsById.get(shotId);
+              if (!shot || now >= shot.createdAt + TICKET_TTL_MS) continue;
+              if (_ticketPool.some((ticket: any) => ticket.ticket === shot.ticket && ticket.randstr === shot.randstr && ticket.createdAt === shot.createdAt)) continue;
+              _ticketPool.push({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt });
+              returnedShotIds.add(shotId);
+              restoredShotIds.push(shotId);
             }
             ticketReturnCount = returnedShotIds.size;
           }
-          const logPayload = { ...event.payload };
+          const restoredShotIdSet = new Set(restoredShotIds || []);
+          const logPayload = event.type === 'tickets_returned'
+            ? {
+                ...event.payload,
+                count: restoredShotIds?.length ?? 0,
+                shotIds: restoredShotIds || [],
+                shots: ((event.payload.shots as Array<{ shotId?: unknown }>) || [])
+                  .filter((shot) => restoredShotIdSet.has(String(shot.shotId))),
+              }
+            : { ...event.payload };
           postToOverlay({ type: 'FIRE_LOG_V2_EVENT', data: {
             type: event.type,
             ...logPayload,
@@ -1422,13 +1440,6 @@ export default defineContentScript({
             void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
           }
           if (event.type === 'tickets_returned') {
-            const now = Date.now();
-            for (const shotId of (event.payload.shotIds as string[]) || []) {
-              const shot = shotsById.get(shotId);
-              if (shot && now < shot.createdAt + TICKET_TTL_MS && !_ticketPool.some((ticket: any) => ticket.ticket === shot.ticket && ticket.randstr === shot.randstr && ticket.createdAt === shot.createdAt)) {
-                _ticketPool.push({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt });
-              }
-            }
             writePageTicketStore();
             void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
             postToOverlay({ type: 'FIRE_RESULT', line: '> Cancelled — returned unused tickets' });

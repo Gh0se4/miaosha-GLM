@@ -83,6 +83,8 @@ function createContentHarness(options: {
   ocrAutoSetRejects?: boolean;
 } = {}) {
   const listeners: Array<(event: any) => unknown> = [];
+  const activeMessageListeners = new Set<(event: any) => unknown>();
+  const activeTimeouts = new Map<number, number>();
   const posted: any[] = [];
   const runnerEvents: string[] = [];
   const runnerSlotShotIds: string[] = [];
@@ -92,6 +94,8 @@ function createContentHarness(options: {
   let calibrationCalls = 0;
   let orderResultIndex = 0;
   let ocrAutoSetCalls = 0;
+  let nextTimeoutId = 1;
+  let mainWorldFetcher: ((opts: any) => Promise<any>) | undefined;
   let ocrAutoStored: unknown = options.ocrAutoPreference ?? null;
   const storageWrites: Array<{ key: string; value: unknown }> = [];
   let nextSaleTime = options.nextSaleTime ?? Date.now() + 60 * 60 * 1000;
@@ -131,9 +135,14 @@ function createContentHarness(options: {
   const window = {
     sessionStorage: { getItem: () => 'test' },
     addEventListener: (type: string, listener: (event: any) => unknown) => {
-      if (type === 'message') listeners.push(listener);
+      if (type === 'message') {
+        listeners.push(listener);
+        activeMessageListeners.add(listener);
+      }
     },
-    removeEventListener: () => undefined,
+    removeEventListener: (type: string, listener: (event: any) => unknown) => {
+      if (type === 'message') activeMessageListeners.delete(listener);
+    },
     postMessage: (message: any) => {
       posted.push(message);
       if (message.type === 'PAYMENT_STATE' && options.paymentStateFails) {
@@ -240,7 +249,7 @@ function createContentHarness(options: {
     if (id.includes('settings/sale-time')) return { SALE_ALARM_MINUTES: [], SALE_TIME_DEFAULT: {}, getNextSaleTime: () => nextSaleTime, saleTimeStore: { get: async () => ({}) } };
     if (id.includes('settings/captcha')) return { captchaStore: { get: async () => ({ batchSessionLimit: 100 }) } };
     if (id.includes('platform/adapters/bigmodel/request')) return {
-      setMainWorldFetcher: () => undefined,
+      setMainWorldFetcher: (fetcher: (opts: any) => Promise<any>) => { mainWorldFetcher = fetcher; },
       xhrRequest: async () => { pollCalls++; return { data: { code: 0, data: { status: 'SUCCESS' } } }; },
     };
     if (id.includes('platform/shared/stores')) return { createAuthStore: () => ({ get: () => null, set: async () => undefined }) };
@@ -295,8 +304,12 @@ function createContentHarness(options: {
     JSON,
     Error,
     queueMicrotask,
-    setTimeout: () => 0,
-    clearTimeout: () => undefined,
+    setTimeout: (_callback: () => void, delay = 0) => {
+      const id = nextTimeoutId++;
+      activeTimeouts.set(id, Number(delay));
+      return id;
+    },
+    clearTimeout: (id: number) => { activeTimeouts.delete(id); },
     setInterval: () => 0,
     clearInterval: () => undefined,
   });
@@ -311,6 +324,14 @@ function createContentHarness(options: {
     get pollCalls() { return pollCalls; },
     get runnerCount() { return runnerCount; },
     get calibrationCalls() { return calibrationCalls; },
+    get activeMessageListenerCount() { return activeMessageListeners.size; },
+    activeTimeoutCount(delay?: number) {
+      return [...activeTimeouts.values()].filter((value) => delay === undefined || value === delay).length;
+    },
+    async fetchThroughMainWorld(opts: any) {
+      if (!mainWorldFetcher) throw new Error('MAIN world fetcher was not registered');
+      return mainWorldFetcher(opts);
+    },
     setNextSaleTime(value: number) { nextSaleTime = value; },
     async start() { await contentScript.main(); },
     async command(type: string, data?: any) {
@@ -600,6 +621,33 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
   });
 
+  it('does not dispatch or leak relay resources when onAbortReady aborts synchronously', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    const listenersBefore = harness.activeMessageListenerCount;
+    const relayTimeoutsBefore = harness.activeTimeoutCount(8_000);
+
+    const relay = harness.fetchThroughMainWorld({
+      method: 'POST',
+      url: 'https://bigmodel.cn/api/biz/pay/preview',
+      headers: {},
+      requestId: 'sync-abort-request',
+      onAbortReady: (abort: () => void) => abort(),
+    });
+
+    await expect(relay).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'MAIN world fetch aborted',
+    });
+    const relayMessages = harness.posted.filter(
+      (message) => message.requestId === 'sync-abort-request',
+    );
+    expect(relayMessages.filter((message) => message.type === 'DO_FETCH_CANCEL')).toHaveLength(1);
+    expect(relayMessages.filter((message) => message.type === 'DO_FETCH')).toEqual([]);
+    expect(harness.activeMessageListenerCount).toBe(listenersBefore);
+    expect(harness.activeTimeoutCount(8_000)).toBe(relayTimeoutsBefore);
+  });
+
   it('expires a snapshotted ticket immediately before fetch, drops it, and continues with a fresh slot', async () => {
     let now = 300_000;
     const harness = createContentHarness({
@@ -651,6 +699,57 @@ describe('bm-capture.content.ts scope regression', () => {
     expect((lastTicketStoreWrite?.list || []).some(
       (ticket: any) => ticket.ticket === 'ticket-expiring',
     )).toBe(false);
+  });
+
+  it('counts only fresh tickets actually restored from a mixed returned event', async () => {
+    let now = 300_000;
+    const harness = createContentHarness({
+      now: () => now,
+      onPreparationReady: () => { now = 300_001; },
+      shots: [
+        { ticket: 'ticket-expired', randstr: 'rand-expired', createdAt: 1, productId: 'product-expired', priority: 1 },
+        { ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000, productId: 'product-fresh', priority: 2 },
+      ],
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: { classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' } },
+      },
+      returnedTicketCounts: [2],
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_FIRE', { startMs: now, reason: 'manual' });
+
+    const returnedEvent = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned',
+      )?.data,
+      'mixed returned-ticket event was not posted',
+    );
+    expect(returnedEvent).toMatchObject({
+      count: 1,
+      ticketReturnCount: 1,
+      shotIds: [expect.stringMatching(/:shot-1$/)],
+      shots: [expect.objectContaining({ shotId: expect.stringMatching(/:shot-1$/) })],
+    });
+
+    const returnedRun = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_RUN'
+          && !('mode' in (message.data || {}))
+          && typeof message.data?.ticketsReturned === 'number',
+      )?.data,
+      'returned-ticket run update was not posted',
+    );
+    expect(returnedRun).toMatchObject({ ticketReturnCount: 1, ticketsReturned: 1 });
+
+    const restoredTickets = harness.posted
+      .filter((message) => message.type === 'WRITE_TICKET_STORE')
+      .at(-1)?.list || [];
+    expect(restoredTickets).toEqual([
+      expect.objectContaining({ ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000 }),
+    ]);
   });
 
   it('records a quiet-window entry once per sale and records again for the next sale', async () => {
