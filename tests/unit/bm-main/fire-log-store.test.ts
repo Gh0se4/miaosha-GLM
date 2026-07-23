@@ -530,10 +530,11 @@ describe('Fire Log V2 store', () => {
   });
 
   it('opens Fire Matrix by default and exposes stop plus complete-log controls', () => {
+    const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
     const posted: Array<Record<string, unknown>> = [];
     const scope = vm.createContext({
       window: {
-        addEventListener: () => undefined,
+        addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
         postMessage: (message: Record<string, unknown>) => posted.push(message),
       },
       _NS: 'default-panel-', MSG_OVL: '__overlay', MSG_CMD: '__command',
@@ -545,9 +546,21 @@ describe('Fire Log V2 store', () => {
 
     expect(document.getElementById('default-panel-fv')).not.toBeNull();
     expect(document.getElementById('default-panel-fv_json')!.textContent).toBe('完整日志json');
+    expect(document.getElementById('default-panel-fv_wave')!.textContent).toBe('Idle');
+    expect(document.getElementById('default-panel-fv_cnt')!.textContent).toBe('0/0 shots');
     expect((document.getElementById('default-panel-fv_stop') as HTMLButtonElement).disabled).toBe(true);
     expect(document.getElementById('default-panel-fv_stop')!.textContent).toBe('尚未开始');
-    (scope._fv_setStopState as (active: boolean) => void)(true);
+
+    listeners[0]({ data: {
+      __overlay: true,
+      type: 'FIRE_BATCH_START',
+      data: { mode: 'manual', totalShots: 2, burstIntervalMs: 100, startMs: 1 },
+    } });
+
+    expect(document.getElementById('default-panel-fv_wave')!.textContent).toBe('Wave 1');
+    expect(scope._fv_waveCount).toBe(1);
+    expect((document.getElementById('default-panel-fv_stop') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.getElementById('default-panel-fv_stop')!.textContent).toBe('停止');
     (document.getElementById('default-panel-fv_stop') as HTMLButtonElement).click();
     expect(posted).toContainEqual({ __command: true, type: 'CANCEL_FIRE' });
     document.body.innerHTML = '';
