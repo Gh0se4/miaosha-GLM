@@ -264,6 +264,37 @@ describe('Fire Log V2 store', () => {
     });
   });
 
+  it('serializes two successful recoveries so an old fallback cannot overwrite the first current write', async () => {
+    let shotWriteAttempt = 0;
+    const failFirstIdb = {
+      open(name: string, version?: number) {
+        const request = idbFactory.open(name, version);
+        request.addEventListener('success', () => {
+          const db = request.result;
+          const transaction = db.transaction.bind(db);
+          db.transaction = ((storeNames: string | string[], mode?: IDBTransactionMode) => {
+            const storeName = typeof storeNames === 'string' ? storeNames : storeNames[0];
+            if (storeName === 'shots' && mode === 'readwrite' && ++shotWriteAttempt === 1) {
+              throw new Error('simulated initial fallback');
+            }
+            return transaction(storeNames, mode);
+          }) as typeof db.transaction;
+        });
+        return request;
+      },
+    };
+    const store = makeStore(dbName, { indexedDB: failFirstIdb });
+    await store.writeShot({ shotId: 'sh-double-recovery', sessionId: 's-1', outcome: 'error', fallbackOnly: true });
+
+    const firstRecovery = store.writeShot({ shotId: 'sh-double-recovery', sessionId: 's-1', outcome: 'success', recovered: true });
+    const secondRecovery = store.writeShot({ shotId: 'sh-double-recovery', sessionId: 's-1', finishedAt: 1234 });
+    await Promise.all([firstRecovery, secondRecovery]);
+
+    const expected = { shots: [{ outcome: 'success', recovered: true, finishedAt: 1234 }] };
+    expect(await store.exportLog('s-1')).toMatchObject(expected);
+    expect(await makeStore(dbName).exportLog('s-1')).toMatchObject(expected);
+  });
+
   it('merges database and fallback records without dropping either source', async () => {
     const failingShotsIdb = {
       open(name: string, version?: number) {

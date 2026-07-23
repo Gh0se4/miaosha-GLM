@@ -50,6 +50,7 @@ function createFireLogStore(options) {
   var fallbackRevision = 0;
   var fallbackEventSequence = Date.now() * 1000;
   var dbPromise = null;
+  var writeQueues = Object.create(null);
 
   function warn(error) {
     try { onPersistenceError(error); } catch (e) {}
@@ -118,8 +119,7 @@ function createFireLogStore(options) {
     fallbackChanges[store][key] = remaining;
   }
 
-  function write(store, record) {
-    var clean = _fireLogV2Sanitize(record || {}, false);
+  function writeImmediately(store, clean) {
     return open().then(function(db) {
       if (!db) return remember(store, clean);
       var recordKey = store === 'events' ? null : keyFor(store, clean);
@@ -167,6 +167,25 @@ function createFireLogStore(options) {
         }
       });
     }).catch(function(error) { warn(error); return remember(store, clean); });
+  }
+
+  function write(store, record) {
+    var clean = _fireLogV2Sanitize(record || {}, false);
+    if (store === 'events') return writeImmediately(store, clean);
+    var recordKey = keyFor(store, clean);
+    if (recordKey == null) return writeImmediately(store, clean);
+    var queueKey = store + '\0' + String(recordKey);
+    var previous = writeQueues[queueKey];
+    var ready = previous ? previous.catch(function() {}) : Promise.resolve();
+    var current = ready.then(function() { return writeImmediately(store, clean); });
+    writeQueues[queueKey] = current;
+    return current.then(function(value) {
+      if (writeQueues[queueKey] === current) delete writeQueues[queueKey];
+      return value;
+    }, function(error) {
+      if (writeQueues[queueKey] === current) delete writeQueues[queueKey];
+      throw error;
+    });
   }
 
   function getAll(store) {
