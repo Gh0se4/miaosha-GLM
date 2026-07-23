@@ -89,10 +89,12 @@ describe('OCR automatic preference overlay bridge', () => {
 
     harness.runStartupTimers();
 
-    expect(harness.messages.map((message) => message.type)).toEqual(expect.arrayContaining([
-      'GET_OCR_AUTO_PREF',
-      'OCR_CHECK',
-    ]));
+    expect(harness.messages).toContainEqual({
+      __cmd: true,
+      type: 'GET_OCR_AUTO_PREF',
+      data: { revision: 0 },
+    });
+    expect(harness.messages.map((message) => message.type)).toContain('OCR_CHECK');
   });
 
   it('applies a disabled preference received from the content script', () => {
@@ -112,7 +114,33 @@ describe('OCR automatic preference overlay bridge', () => {
     expect(harness.messages).toContainEqual({
       __cmd: true,
       type: 'SET_OCR_AUTO_PREF',
-      data: { enabled: false },
+      data: { enabled: false, revision: 1 },
     });
+  });
+
+  it('ignores a delayed startup preference after a newer user change', () => {
+    const harness = createOverlayHarness();
+    harness.runStartupTimers();
+    harness.toggle.checked = false;
+
+    harness.toggle.dispatchEvent(new Event('change'));
+    harness.dispatchOverlayMessage({ type: 'OCR_AUTO_PREF', enabled: true, revision: 0 });
+
+    expect(harness.toggle.checked).toBe(false);
+  });
+
+  it('applies the canonical value from a failed current-revision update', () => {
+    const harness = createOverlayHarness();
+    harness.toggle.checked = false;
+    harness.toggle.dispatchEvent(new Event('change'));
+
+    harness.dispatchOverlayMessage({
+      type: 'OCR_AUTO_PREF',
+      enabled: true,
+      revision: 1,
+      persisted: false,
+    });
+
+    expect(harness.toggle.checked).toBe(true);
   });
 });

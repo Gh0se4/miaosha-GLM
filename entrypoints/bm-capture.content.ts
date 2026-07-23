@@ -174,10 +174,16 @@ async function safeGet<T>(key: StorageKey): Promise<T | null> {
   if (!isExtensionContextValid()) return null;
   try { return await storage.getItem<T>(key); } catch { return null; }
 }
-async function safeSet(key: StorageKey, value: unknown): Promise<void> {
-  if (!isExtensionContextValid()) return;
-  try { await storage.setItem(key, value); } catch {}
+async function safeSet(key: StorageKey, value: unknown): Promise<boolean> {
+  if (!isExtensionContextValid()) return false;
+  try {
+    await storage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
 }
+let ocrAutoPreferenceWriteQueue: Promise<void> = Promise.resolve();
 
 // ── Platform adapter shared seams ────────────────────────────────────────────
 const authStore = createAuthStore(true);
@@ -1657,12 +1663,29 @@ export default defineContentScript({
         }
         if (event.data.type === 'GET_OCR_AUTO_PREF') {
           const enabled = (await safeGet<unknown>(OCR_AUTO_PREF_KEY)) !== false;
-          postToOverlay({ type: 'OCR_AUTO_PREF', enabled });
+          postToOverlay({
+            type: 'OCR_AUTO_PREF',
+            enabled,
+            revision: event.data.data?.revision,
+          });
         }
         if (event.data.type === 'SET_OCR_AUTO_PREF') {
           const enabled = event.data.data?.enabled !== false;
-          await safeSet(OCR_AUTO_PREF_KEY, enabled);
-          postToOverlay({ type: 'OCR_AUTO_PREF', enabled });
+          const revision = event.data.data?.revision;
+          const update = ocrAutoPreferenceWriteQueue.then(async () => {
+            const persisted = await safeSet(OCR_AUTO_PREF_KEY, enabled);
+            const canonicalEnabled = persisted
+              ? enabled
+              : (await safeGet<unknown>(OCR_AUTO_PREF_KEY)) !== false;
+            postToOverlay({
+              type: 'OCR_AUTO_PREF',
+              enabled: canonicalEnabled,
+              revision,
+              persisted,
+            });
+          });
+          ocrAutoPreferenceWriteQueue = update.catch(() => undefined);
+          await ocrAutoPreferenceWriteQueue;
         }
         if (event.data.type === 'OCR_CAPTURE' && event.data.data?.reqId) {
           // Capture visible tab (includes cross-origin captcha popup)
