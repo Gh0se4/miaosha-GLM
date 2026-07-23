@@ -1,3 +1,13 @@
+var AUTO_TOGGLE_STORAGE_KEY = _NS + 'auto-ticket-enabled';
+
+function readAutoTicketEnabled() {
+  try { return sessionStorage.getItem(AUTO_TOGGLE_STORAGE_KEY) === '1'; } catch (e) { return false; }
+}
+
+function writeAutoTicketEnabled(enabled) {
+  try { sessionStorage.setItem(AUTO_TOGGLE_STORAGE_KEY, enabled ? '1' : '0'); } catch (e) {}
+}
+
 // ── Overlay HTML ──
 function buildHTML() {
   return '<style>' + CSS + '</style>' +
@@ -142,6 +152,9 @@ function injectOverlay() {
   overlay.innerHTML = buildHTML();
   (document.body || document.documentElement).appendChild(overlay);
 
+  var autoToggle = document.getElementById('_autoToggle');
+  if (autoToggle) autoToggle.checked = readAutoTicketEnabled();
+
   var meter = document.getElementById('_meter');
   if (meter) { var mh = ''; for (var i=0;i<10;i++) mh += '<div class="fp" id="_fp'+i+'"></div>'; meter.innerHTML = mh; }
 
@@ -260,6 +273,7 @@ function injectOverlay() {
 
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
   document.getElementById('_autoToggle').addEventListener('change', function() {
+    writeAutoTicketEnabled(this.checked);
     if (typeof scheduleAutoTicketWindow === 'function' && _rt.nextSaleTime) scheduleAutoTicketWindow(_rt.nextSaleTime);
   });
   document.getElementById('_ocrToggle').addEventListener('change', function() {
@@ -375,7 +389,7 @@ window.addEventListener('message', function(ev) {
   if (ev.source !== window) return;
   if (ev.data?.[MSG_CMD]) {
     if (ev.data.type === 'PRODUCE_CAPTCHA') produceCaptcha();
-    if (ev.data.type === 'AUTO_TICKET_WINDOW_START') setBatchMode(true);
-    if (ev.data.type === 'AUTO_TICKET_WINDOW_STOP') setBatchMode(false);
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_START') setBatchMode(true, 'auto-ticket');
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_STOP') setBatchMode(false, 'auto-ticket');
   }
 });

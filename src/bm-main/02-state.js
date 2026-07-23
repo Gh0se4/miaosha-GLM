@@ -3,6 +3,7 @@
 var CAPTCHA_APPID = '196026326';
 var S = {}; // state
 var _batchMode = false; // batch continuous captcha solving
+var _batchModeOwner = null; // null | 'manual' | 'auto-ticket'
 var _batchCount = 0; // captchas solved in current batch session
 var _activeCaptcha = null; // reference to the currently open TencentCaptcha instance (for force-destroy on ESC)
 var BATCH_SESSION_LIMIT = 100; // auto-stop after this many per session (default 100, updatable via CAPTCHA_CONFIG)
