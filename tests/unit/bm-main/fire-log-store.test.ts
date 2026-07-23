@@ -786,7 +786,11 @@ describe('Fire Log V2 store', () => {
       options?: boolean | AddEventListenerOptions;
     }> = [];
     const originalAddEventListener = document.addEventListener;
-    document.addEventListener = function(type, listener, options) {
+    document.addEventListener = function(
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
       addedListeners.push({ type, listener, options });
       return originalAddEventListener.call(document, type, listener, options);
     } as typeof document.addEventListener;
