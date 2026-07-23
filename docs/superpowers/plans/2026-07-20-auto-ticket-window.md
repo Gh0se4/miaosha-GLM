@@ -6,6 +6,11 @@
 - T−4 minutes 58 seconds: start ticket acquisition.
 - T−10 seconds: stop ticket acquisition.
 
+## Final implementation decisions
+
+- Persist `_autoToggle` at `_NS + 'auto-ticket-enabled'` in page `sessionStorage`. Missing or unreadable state defaults to `false`; a same-tab T−30 reload restores an enabled toggle under the reused namespace.
+- Batch mode records an owner of `manual` or `auto-ticket`. START is idempotent when a batch is already active. An auto-ticket STOP can stop only an auto-owned batch and must leave a manual batch running.
+
 ## Implementation
 
 1. Persist one refresh marker per target sale in page `sessionStorage` under
