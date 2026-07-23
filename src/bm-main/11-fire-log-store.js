@@ -46,6 +46,8 @@ function createFireLogStore(options) {
   var extensionVersion = options.extensionVersion !== undefined ? options.extensionVersion : _fireLogV2ManifestVersion();
   var onPersistenceError = typeof options.onPersistenceError === 'function' ? options.onPersistenceError : function() {};
   var fallback = { sessions: {}, runs: {}, events: [], shots: {} };
+  var fallbackChanges = { sessions: {}, runs: {}, shots: {} };
+  var fallbackRevision = 0;
   var fallbackEventSequence = Date.now() * 1000;
   var dbPromise = null;
 
@@ -90,14 +92,40 @@ function createFireLogStore(options) {
       return eventRecord;
     }
     var key = keyFor(store, record);
-    if (key != null) fallback[store][key] = mergeValues(fallback[store][key], _fireLogV2Sanitize(record, false));
+    if (key != null) {
+      var clean = _fireLogV2Sanitize(record, false);
+      fallback[store][key] = mergeValues(fallback[store][key], clean);
+      if (!fallbackChanges[store][key]) fallbackChanges[store][key] = [];
+      fallbackChanges[store][key].push({ revision: ++fallbackRevision, value: clean });
+    }
     return fallback[store][key] || _fireLogV2Sanitize(record, false);
+  }
+
+  function clearAbsorbedFallback(store, key, absorbedRevision) {
+    var changes = fallbackChanges[store][key] || [];
+    var remaining = [];
+    for (var i = 0; i < changes.length; i++) {
+      if (changes[i].revision > absorbedRevision) remaining.push(changes[i]);
+    }
+    if (!remaining.length) {
+      delete fallback[store][key];
+      delete fallbackChanges[store][key];
+      return;
+    }
+    var record;
+    for (var j = 0; j < remaining.length; j++) record = mergeValues(record, remaining[j].value);
+    fallback[store][key] = record;
+    fallbackChanges[store][key] = remaining;
   }
 
   function write(store, record) {
     var clean = _fireLogV2Sanitize(record || {}, false);
     return open().then(function(db) {
       if (!db) return remember(store, clean);
+      var recordKey = store === 'events' ? null : keyFor(store, clean);
+      var fallbackSnapshot = recordKey == null ? undefined : fallback[store][recordKey];
+      var changes = recordKey == null ? null : fallbackChanges[store][recordKey];
+      var fallbackRevisionSnapshot = changes && changes.length ? changes[changes.length - 1].revision : 0;
       return new Promise(function(resolve) {
         var transaction;
         try { transaction = db.transaction(store, 'readwrite'); } catch (error) { warn(error); resolve(remember(store, clean)); return; }
@@ -112,6 +140,7 @@ function createFireLogStore(options) {
         function completeWrite() {
           if (settled) return;
           settled = true;
+          if (fallbackSnapshot !== undefined) clearAbsorbedFallback(store, recordKey, fallbackRevisionSnapshot);
           resolve(written);
         }
         transaction.oncomplete = completeWrite;
@@ -130,8 +159,10 @@ function createFireLogStore(options) {
           eventRequest.onerror = function() { fallbackWrite(eventRequest.error || new Error('IndexedDB write failed')); };
         } else {
           var getRequest;
-          try { getRequest = transaction.objectStore(store).get(keyFor(store, clean)); } catch (error) { fallbackWrite(error); return; }
-          getRequest.onsuccess = function() { put(mergeValues(getRequest.result, clean)); };
+          try { getRequest = transaction.objectStore(store).get(recordKey); } catch (error) { fallbackWrite(error); return; }
+          getRequest.onsuccess = function() {
+            put(mergeValues(mergeValues(getRequest.result, fallbackSnapshot), clean));
+          };
           getRequest.onerror = function() { fallbackWrite(getRequest.error || new Error('IndexedDB read before write failed')); };
         }
       });

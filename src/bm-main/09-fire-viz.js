@@ -19,6 +19,8 @@ var _fv_nextShotIdx = 0;
 var _fv_currentWaveStartIdx = 0;
 var _fv_persistenceWarningPending = false;
 var _fv_persistenceWarningRendered = false;
+var _fv_dragState = null;
+var _fv_documentDragHandlersBound = false;
 var _FV_PERSISTENCE_WARNING = '日志仅临时保存在内存，刷新页面会丢失';
 
 var _FV_OUTCOME = {
@@ -534,6 +536,25 @@ function _fv_setStopState(active) {
   stop.style.background = active ? '#fff1f2' : '#f8fafc';
 }
 
+function _fv_handleDocumentMouseMove(e) {
+  if (!_fv_dragState) return;
+  var panel = document.getElementById(_NS + 'fv');
+  if (!panel) { _fv_dragState = null; return; }
+  panel.style.left = (_fv_dragState.left + e.clientX - _fv_dragState.startX) + 'px';
+  panel.style.top = (_fv_dragState.top + e.clientY - _fv_dragState.startY) + 'px';
+}
+
+function _fv_handleDocumentMouseUp() {
+  _fv_dragState = null;
+}
+
+function _fv_bindDocumentDragEvents() {
+  if (_fv_documentDragHandlersBound) return;
+  _fv_documentDragHandlersBound = true;
+  document.addEventListener('mousemove', _fv_handleDocumentMouseMove);
+  document.addEventListener('mouseup', _fv_handleDocumentMouseUp);
+}
+
 function _fv_bindEvents() {
   var stop = document.getElementById(_NS + 'fv_stop');
   if (stop) stop.addEventListener('click', function() {
@@ -543,6 +564,7 @@ function _fv_bindEvents() {
 
   var cls = document.getElementById(_NS + 'fv_cls');
   if (cls) cls.addEventListener('click', function() {
+    _fv_dragState = null;
     var ov = document.getElementById(_NS + 'fv');
     if (ov) ov.parentNode && ov.parentNode.removeChild(ov);
     var css = document.getElementById(_NS + 'fc');
@@ -578,29 +600,20 @@ function _fv_bindEvents() {
   }
 
   var hd = document.getElementById(_NS + 'fv_h');
-  var ov = document.getElementById(_NS + 'fv');
-  if (hd && ov) {
-    var ox = 0, oy = 0, left = 0, top = 0, dragging = false;
+  if (hd && document.getElementById(_NS + 'fv')) {
+    _fv_bindDocumentDragEvents();
     hd.addEventListener('mousedown', function(e) {
       if (e.target.tagName === 'BUTTON') return;
-      dragging = true;
-      ox = e.clientX; oy = e.clientY;
-      var r = ov.getBoundingClientRect();
-      left = r.left; top = r.top;
-      ov.style.transition = 'none';
-      ov.style.transform  = 'none';
-      ov.style.left       = left + 'px';
-      ov.style.top        = top  + 'px';
+      var panel = document.getElementById(_NS + 'fv');
+      if (!panel) return;
+      var r = panel.getBoundingClientRect();
+      _fv_dragState = { startX: e.clientX, startY: e.clientY, left: r.left, top: r.top };
+      panel.style.transition = 'none';
+      panel.style.transform  = 'none';
+      panel.style.left       = r.left + 'px';
+      panel.style.top        = r.top  + 'px';
       e.preventDefault();
     });
-    document.addEventListener('mousemove', function(e) {
-      if (!dragging) return;
-      var o = document.getElementById(_NS + 'fv');
-      if (!o) { dragging = false; return; }
-      o.style.left = (left + e.clientX - ox) + 'px';
-      o.style.top  = (top  + e.clientY - oy) + 'px';
-    });
-    document.addEventListener('mouseup', function() { dragging = false; });
   }
 }
 

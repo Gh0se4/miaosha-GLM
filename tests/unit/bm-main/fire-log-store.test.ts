@@ -22,12 +22,115 @@ function makeStore(dbName: string, options: Record<string, unknown> = {}) {
   return create({ dbName, indexedDB: idbFactory, extensionVersion: '9.8.7', ...options });
 }
 
+function makeSessionStorage(initial: Record<string, string> = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+  };
+}
+
+function loadFireLogger(options: {
+  namespace: string;
+  sessionStorage: ReturnType<typeof makeSessionStorage>;
+  nowMs: number;
+  navigationType?: string;
+  randomUUID?: () => string;
+}) {
+  class FixedDate extends Date {
+    constructor(value?: string | number) { super(value === undefined ? options.nowMs : value); }
+    static now() { return options.nowMs; }
+  }
+  const window: Record<string, unknown> = {
+    addEventListener: () => {},
+    postMessage: () => {},
+  };
+  const performance: Record<string, unknown> = { now: () => 1 };
+  if (options.navigationType !== undefined) {
+    performance.getEntriesByType = (type: string) => type === 'navigation' ? [{ type: options.navigationType }] : [];
+  }
+  const scope = vm.createContext({
+    window, _NS: options.namespace, MSG_OVL: '__overlay',
+    document: { visibilityState: 'visible', addEventListener: () => {} },
+    sessionStorage: options.sessionStorage,
+    navigator: { userAgent: 'test-agent' }, location: { href: 'https://example.test' },
+    Intl, Date: FixedDate, Math, Promise, performance,
+    crypto: options.randomUUID ? { randomUUID: options.randomUUID } : undefined,
+    setTimeout: () => 0, postToOverlay: () => {},
+  });
+  vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main/12-fire-log.js'), 'utf8'), scope);
+  return { scope, window };
+}
+
 describe('Fire Log V2 store', () => {
   let dbName: string;
 
   beforeEach(() => {
     dbName = 'fire-log-test-' + Math.random().toString(36).slice(2);
     idbFactory = new IDBFactory();
+  });
+
+  it('creates namespace-scoped high-entropy session IDs for new tabs opened in the same millisecond', () => {
+    const nowMs = Date.parse('2026-07-23T07:08:09.456Z');
+    let uuidSequence = 0;
+    const randomUUID = () => '00000000-0000-4000-8000-' + String(++uuidSequence).padStart(12, '0');
+    const first = loadFireLogger({ namespace: 'same-ns-', sessionStorage: makeSessionStorage(), nowMs, navigationType: 'navigate', randomUUID });
+    const second = loadFireLogger({ namespace: 'same-ns-', sessionStorage: makeSessionStorage(), nowMs, navigationType: 'navigate', randomUUID });
+
+    expect(first.scope._log_sessionId).not.toBe(second.scope._log_sessionId);
+    expect(first.scope._log_sessionId).toContain('same-ns-');
+    expect(second.scope._log_sessionId).toContain('same-ns-');
+    expect(first.scope._log_sessionId).toContain('456');
+  });
+
+  it('persists a new session immediately and restores its ID on a real reload', () => {
+    const sessionStorage = makeSessionStorage();
+    const first = loadFireLogger({
+      namespace: 'reload-', sessionStorage, nowMs: Date.parse('2026-07-23T07:08:09.456Z'),
+      navigationType: 'navigate', randomUUID: () => 'first-session-random',
+    });
+    const saved = JSON.parse(sessionStorage.getItem('reload-lg') || 'null');
+
+    expect(saved).toMatchObject({ sessionId: first.scope._log_sessionId, entries: [], shotSeq: 0 });
+
+    const reloaded = loadFireLogger({
+      namespace: 'reload-', sessionStorage, nowMs: Date.parse('2026-07-23T07:09:10.789Z'),
+      navigationType: 'reload', randomUUID: () => 'must-not-be-used',
+    });
+    expect(reloaded.scope._log_sessionId).toBe(first.scope._log_sessionId);
+  });
+
+  it('starts clean when a new navigation receives cloned opener sessionStorage', () => {
+    const sessionStorage = makeSessionStorage({
+      'clone-lg': JSON.stringify({
+        sessionId: 'cloned-session', sessionStartAt: '2026-07-23T00:00:00.000Z',
+        initialVisibilityState: 'hidden', entries: [{ seq: 7, outcome: 'error' }], shotSeq: 7, waveCount: 3,
+      }),
+    });
+    const loaded = loadFireLogger({
+      namespace: 'clone-', sessionStorage, nowMs: Date.parse('2026-07-23T07:08:09.456Z'),
+      navigationType: 'navigate', randomUUID: () => 'new-tab-random',
+    });
+
+    expect(loaded.scope._log_sessionId).not.toBe('cloned-session');
+    expect((loaded.window.__fireLogEntries as () => unknown[])()).toEqual([]);
+    expect(loaded.scope._log_shotSeq).toBe(0);
+    expect(loaded.scope._log_waveCount).toBe(0);
+    expect(JSON.parse(sessionStorage.getItem('clone-lg') || 'null')).toMatchObject({
+      sessionId: loaded.scope._log_sessionId, entries: [], shotSeq: 0, waveCount: 0,
+    });
+  });
+
+  it('keeps legacy harness restore semantics when navigation timing is unavailable', () => {
+    const sessionStorage = makeSessionStorage({
+      'legacy-lg': JSON.stringify({ sessionId: 'legacy-session', entries: [{ seq: 2 }], shotSeq: 2, waveCount: 1 }),
+    });
+    const loaded = loadFireLogger({ namespace: 'legacy-', sessionStorage, nowMs: Date.now() });
+
+    expect(loaded.scope._log_sessionId).toBe('legacy-session');
+    expect((loaded.window.__fireLogEntries as () => unknown[])()).toHaveLength(1);
+    expect(loaded.scope._log_shotSeq).toBe(2);
   });
 
   it('restores persisted records after store reinitialization', async () => {
@@ -79,6 +182,85 @@ describe('Fire Log V2 store', () => {
       runs: [{ dbOnly: { run: true }, fallbackOnly: { run: true } }],
       events: [{ dbOnly: { event: true }, fallbackOnly: { event: true } }],
       shots: [{ dbOnly: { shot: true }, fallbackOnly: { shot: true }, dbArray: ['db', 'fallback'] }],
+    });
+  });
+
+  it('absorbs fail-once fallback records when the same durable keys recover', async () => {
+    const durable = makeStore(dbName);
+    await durable.writeSession({ sessionId: 's-recover', dbOnly: { session: true }, state: 'created' });
+    await durable.writeRun({ runId: 'r-recover', sessionId: 's-recover', dbOnly: { run: true }, status: 'created' });
+    await durable.writeShot({ shotId: 'sh-recover', sessionId: 's-recover', dbOnly: { shot: true }, outcome: 'created' });
+
+    const failFirstWrite = new Set(['sessions', 'runs', 'shots']);
+    const failOnceIdb = {
+      open(name: string, version?: number) {
+        const request = idbFactory.open(name, version);
+        request.addEventListener('success', () => {
+          const db = request.result;
+          const transaction = db.transaction.bind(db);
+          db.transaction = ((storeNames: string | string[], mode?: IDBTransactionMode) => {
+            const storeName = typeof storeNames === 'string' ? storeNames : storeNames[0];
+            if (mode === 'readwrite' && failFirstWrite.delete(storeName)) throw new Error('simulated fail-once write');
+            return transaction(storeNames, mode);
+          }) as typeof db.transaction;
+        });
+        return request;
+      },
+    };
+    const recovering = makeStore(dbName, { indexedDB: failOnceIdb });
+    await recovering.writeSession({ sessionId: 's-recover', fallbackOnly: { session: true }, state: 'pending' });
+    await recovering.writeRun({ runId: 'r-recover', sessionId: 's-recover', fallbackOnly: { run: true }, status: 'pending' });
+    await recovering.writeShot({ shotId: 'sh-recover', sessionId: 's-recover', fallbackOnly: { shot: true }, outcome: 'error' });
+
+    await recovering.writeSession({ sessionId: 's-recover', currentOnly: { session: true }, state: 'finished' });
+    await recovering.writeRun({ runId: 'r-recover', sessionId: 's-recover', currentOnly: { run: true }, status: 'finished' });
+    await recovering.writeShot({ shotId: 'sh-recover', sessionId: 's-recover', currentOnly: { shot: true }, outcome: 'success' });
+
+    const expected = {
+      session: {
+        dbOnly: { session: true }, fallbackOnly: { session: true }, currentOnly: { session: true }, state: 'finished',
+      },
+      runs: [{ dbOnly: { run: true }, fallbackOnly: { run: true }, currentOnly: { run: true }, status: 'finished' }],
+      shots: [{ dbOnly: { shot: true }, fallbackOnly: { shot: true }, currentOnly: { shot: true }, outcome: 'success' }],
+    };
+    expect(await recovering.exportLog('s-recover')).toMatchObject(expected);
+    expect(await makeStore(dbName).exportLog('s-recover')).toMatchObject(expected);
+  });
+
+  it('keeps only concurrent fallback deltas after an in-flight recovery commits', async () => {
+    let shotWriteAttempt = 0;
+    const controlledIdb = {
+      open(name: string, version?: number) {
+        const request = idbFactory.open(name, version);
+        request.addEventListener('success', () => {
+          const db = request.result;
+          const transaction = db.transaction.bind(db);
+          db.transaction = ((storeNames: string | string[], mode?: IDBTransactionMode) => {
+            const storeName = typeof storeNames === 'string' ? storeNames : storeNames[0];
+            if (storeName === 'shots' && mode === 'readwrite') {
+              shotWriteAttempt++;
+              if (shotWriteAttempt === 1 || shotWriteAttempt === 3) throw new Error('simulated fallback update');
+            }
+            return transaction(storeNames, mode);
+          }) as typeof db.transaction;
+        });
+        return request;
+      },
+    };
+    const store = makeStore(dbName, { indexedDB: controlledIdb });
+    await store.writeShot({ shotId: 'sh-concurrent', sessionId: 's-1', outcome: 'error', fallbackBeforeRecovery: true });
+
+    const recovery = store.writeShot({ shotId: 'sh-concurrent', sessionId: 's-1', outcome: 'success', recovered: true });
+    const concurrentFallback = store.writeShot({ shotId: 'sh-concurrent', sessionId: 's-1', concurrentOnly: true });
+    await Promise.all([recovery, concurrentFallback]);
+
+    expect(await store.exportLog('s-1')).toMatchObject({
+      shots: [{ outcome: 'success', recovered: true, concurrentOnly: true }],
+    });
+
+    await store.writeShot({ shotId: 'sh-concurrent', sessionId: 's-1', outcome: 'success', finalized: true });
+    expect(await makeStore(dbName).exportLog('s-1')).toMatchObject({
+      shots: [{ outcome: 'success', recovered: true, concurrentOnly: true, finalized: true }],
     });
   });
 
@@ -564,6 +746,58 @@ describe('Fire Log V2 store', () => {
     (document.getElementById('default-panel-fv_stop') as HTMLButtonElement).click();
     expect(posted).toContainEqual({ __command: true, type: 'CANCEL_FIRE' });
     document.body.innerHTML = '';
+  });
+
+  it('binds document drag listeners once across Fire Matrix close and reopen cycles', () => {
+    const addedListeners: Array<{
+      type: string;
+      listener: EventListenerOrEventListenerObject;
+      options?: boolean | AddEventListenerOptions;
+    }> = [];
+    const originalAddEventListener = document.addEventListener;
+    document.addEventListener = function(type, listener, options) {
+      addedListeners.push({ type, listener, options });
+      return originalAddEventListener.call(document, type, listener, options);
+    } as typeof document.addEventListener;
+    const scope = vm.createContext({
+      window: { addEventListener: () => {}, postMessage: () => {} },
+      _NS: 'drag-', MSG_OVL: '__overlay', MSG_CMD: '__command',
+      document, Date, Math, setTimeout: () => 0,
+      navigator: { clipboard: null },
+    });
+    document.body.innerHTML = '';
+
+    try {
+      vm.runInContext(readFileSync(resolve(__dirname, '../../../src/bm-main/09-fire-viz.js'), 'utf8'), scope);
+      for (let cycle = 0; cycle < 3; cycle++) {
+        (document.getElementById('drag-fv_cls') as HTMLButtonElement).click();
+        (scope._fv_show as () => void)();
+      }
+
+      expect(addedListeners.filter(({ type }) => type === 'mousemove')).toHaveLength(1);
+      expect(addedListeners.filter(({ type }) => type === 'mouseup')).toHaveLength(1);
+
+      const panel = document.getElementById('drag-fv') as HTMLElement;
+      const header = document.getElementById('drag-fv_h') as HTMLElement;
+      header.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 20 }));
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 35, clientY: 55 }));
+      expect(panel.style.left).toBe('25px');
+      expect(panel.style.top).toBe('35px');
+      document.dispatchEvent(new MouseEvent('mouseup'));
+      expect(scope._fv_dragState).toBeNull();
+
+      header.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 1, clientY: 2 }));
+      expect(scope._fv_dragState).not.toBeNull();
+      expect(Object.values(scope._fv_dragState)).not.toContain(panel);
+      (document.getElementById('drag-fv_cls') as HTMLButtonElement).click();
+      expect(scope._fv_dragState).toBeNull();
+    } finally {
+      document.addEventListener = originalAddEventListener;
+      for (const { type, listener, options } of addedListeners) {
+        document.removeEventListener(type, listener, options);
+      }
+      document.body.innerHTML = '';
+    }
   });
 
   it('retains same-index shots from separate runs when their IDs are run-scoped', async () => {

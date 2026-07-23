@@ -18,14 +18,60 @@ var _log_v2PersistenceErrorWritten = false;
 var _log_sessionStartedAt = '';
 var _log_initialVisibilityState = '';
 
+function _logNavigationIsReload() {
+  try {
+    if (typeof performance === 'undefined') return null;
+    if (typeof performance.getEntriesByType === 'function') {
+      var entries = performance.getEntriesByType('navigation');
+      if (entries && entries.length && typeof entries[0].type === 'string') {
+        return entries[0].type === 'reload';
+      }
+    }
+    if (performance.navigation && typeof performance.navigation.type === 'number') {
+      var reloadType = typeof performance.navigation.TYPE_RELOAD === 'number' ? performance.navigation.TYPE_RELOAD : 1;
+      return performance.navigation.type === reloadType;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function _logRandomSessionSuffix() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto) {
+      if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+      if (typeof crypto.getRandomValues === 'function') {
+        var bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        var hex = '';
+        for (var i = 0; i < bytes.length; i++) hex += (bytes[i] + 256).toString(16).slice(1);
+        return hex;
+      }
+    }
+  } catch (e) {}
+  var parts = [];
+  for (var j = 0; j < 4; j++) {
+    parts.push(Math.floor(Math.random() * 0x100000000).toString(36));
+  }
+  return parts.join('-') + '-' + Date.now().toString(36);
+}
+
+function _logCreateSessionId() {
+  var timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return String(_NS) + timestamp + '-' + _logRandomSessionSuffix();
+}
+
 (function initFireLog() {
-  // Load existing log from sessionStorage
+  // sessionStorage may be cloned into a newly opened tab. Restore only a
+  // genuine reload; older harnesses without navigation timing keep the
+  // historical restore behavior.
+  var navigationIsReload = _logNavigationIsReload();
   try {
     var saved = JSON.parse(sessionStorage.getItem(_NS + 'lg') || 'null');
-    if (saved && Array.isArray(saved.entries)) {
+    if (saved && Array.isArray(saved.entries) && navigationIsReload !== false) {
       _log_entries = saved.entries;
       _log_sessionId = saved.sessionId || '';
       _log_shotSeq = saved.shotSeq || 0;
+      _log_waveCount = saved.waveCount || 0;
       _log_sessionStartedAt = saved.sessionStartAt || '';
       _log_initialVisibilityState = saved.initialVisibilityState || '';
     }
@@ -33,7 +79,7 @@ var _log_initialVisibilityState = '';
 
   // Generate a new session ID if none exists
   if (!_log_sessionId) {
-    _log_sessionId = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    _log_sessionId = _logCreateSessionId();
   }
   if (!_log_sessionStartedAt) _log_sessionStartedAt = new Date().toISOString();
   if (!_log_initialVisibilityState) _log_initialVisibilityState = document.visibilityState || '';
@@ -51,6 +97,8 @@ var _log_initialVisibilityState = '';
       }));
     } catch(e) {}
   }
+
+  saveLog();
 
   function legacyDownloadLog() {
     var report = {
