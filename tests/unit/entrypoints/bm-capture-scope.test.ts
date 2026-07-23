@@ -600,6 +600,59 @@ describe('bm-capture.content.ts scope regression', () => {
     expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
   });
 
+  it('expires a snapshotted ticket immediately before fetch, drops it, and continues with a fresh slot', async () => {
+    let now = 300_000;
+    const harness = createContentHarness({
+      now: () => now,
+      onPreparationReady: () => { now = 300_001; },
+      shots: [
+        { ticket: 'ticket-expiring', randstr: 'rand-expiring', createdAt: 1, productId: 'product-expiring', priority: 1 },
+        { ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000, productId: 'product-fresh', priority: 2 },
+      ],
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: { classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' } },
+      },
+      returnedTicketCounts: [1],
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_FIRE', { startMs: now, reason: 'manual' });
+
+    const expiredShot = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_SHOT_RESULT' && message.data?.outcome === 'expired',
+      ),
+      'expired shot result was not posted',
+    );
+    expect(expiredShot.data).toMatchObject({
+      productId: 'product-expiring',
+      outcome: 'expired',
+      terminalUnsentReason: 'expired',
+    });
+    expect(expiredShot.data?.timing).toBeUndefined();
+    expect(harness.posted.some(
+      (message) => message.type === 'FIRE_RESULT' && String(message.line).includes('expired'),
+    )).toBe(true);
+    expect(harness.runnerEvents).toContain('expired');
+    expect(harness.fireRequestShotIds).toEqual([expect.stringMatching(/:shot-1$/)]);
+    expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
+
+    await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned',
+      ),
+      'returned-ticket event was not posted',
+    );
+    const lastTicketStoreWrite = harness.posted
+      .filter((message) => message.type === 'WRITE_TICKET_STORE')
+      .at(-1);
+    expect((lastTicketStoreWrite?.list || []).some(
+      (ticket: any) => ticket.ticket === 'ticket-expiring',
+    )).toBe(false);
+  });
+
   it('records a quiet-window entry once per sale and records again for the next sale', async () => {
     const now = Date.now();
     const harness = createContentHarness({ nextSaleTime: now + 60 * 60 * 1000 });

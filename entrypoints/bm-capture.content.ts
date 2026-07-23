@@ -1243,6 +1243,21 @@ export default defineContentScript({
             shot: cancelledShot,
           } });
         };
+        const expiredAt = Date.now();
+        const ticketExpiresAt = shot.createdAt + TICKET_TTL_MS;
+        if (expiredAt >= ticketExpiresAt) {
+          const expiredShot = buildShotLog(shot, idx, 'expired', Math.max(0, expiredAt - t1), t1, undefined, {
+            code: 0,
+            serverMsg: 'ticket expired before fetch',
+            terminalUnsentReason: 'expired',
+            expiredAt,
+            ticketExpiresAt,
+            ticketAgeMs: Math.max(0, expiredAt - shot.createdAt),
+          });
+          postToOverlay({ type: 'FIRE_RESULT', line: tag + ': ticket expired before fetch' });
+          postToOverlay({ type: 'FIRE_SHOT_RESULT', data: expiredShot });
+          return 'expired';
+        }
         try {
           const result = await (bigmodelAdapter.orderPipeline as any).run({
             platform: 'bigmodel',
@@ -1407,9 +1422,10 @@ export default defineContentScript({
             void getTicketInfo().then((info) => postToOverlay({ type: 'TICKET_COUNT', count: info.count, tickets: info.tickets }));
           }
           if (event.type === 'tickets_returned') {
+            const now = Date.now();
             for (const shotId of (event.payload.shotIds as string[]) || []) {
               const shot = shotsById.get(shotId);
-              if (shot && !_ticketPool.some((ticket: any) => ticket.ticket === shot.ticket && ticket.randstr === shot.randstr && ticket.createdAt === shot.createdAt)) {
+              if (shot && now < shot.createdAt + TICKET_TTL_MS && !_ticketPool.some((ticket: any) => ticket.ticket === shot.ticket && ticket.randstr === shot.randstr && ticket.createdAt === shot.createdAt)) {
                 _ticketPool.push({ ticket: shot.ticket, randstr: shot.randstr, createdAt: shot.createdAt });
               }
             }
@@ -1428,7 +1444,7 @@ export default defineContentScript({
           if (!shot) return { outcome: 'error' as const };
           const outcome = await fireOne(shot, requestSeq, { requestId, onFetchStarted, setAbort });
           postToOverlay({ type: 'FIRE_RESULT', line: `> ${outcome} (${requestSeq + 1}/${total})` });
-          return { outcome: (['success', 'busy', 'soldout', 'neterr', 'waf', 'cancelled'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled' };
+          return { outcome: (['success', 'busy', 'soldout', 'neterr', 'waf', 'cancelled', 'expired'].includes(outcome) ? outcome : 'error') as 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled' | 'expired' };
         },
       });
       currentFireRunner = runner;

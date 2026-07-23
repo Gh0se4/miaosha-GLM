@@ -40,7 +40,7 @@ export interface FireRunInput {
     onFetchStarted(meta?: { fetchStartedAt?: number; [key: string]: unknown }): void;
     setAbort(abort: () => void): void;
   }): Promise<{
-    outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
+    outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled' | 'expired';
   }>;
   onStateChange?(snapshot: FireShotState[]): void;
 }
@@ -142,7 +142,7 @@ export class FireRunner {
 
       while (true) {
         if (this.cancelled) {
-          stopReason = 'cancelled';
+          if (stopReason === 'complete') stopReason = 'cancelled';
           break;
         }
         if (stopReason !== 'complete') break;
@@ -173,6 +173,11 @@ export class FireRunner {
           const work = this.execute(next)
             .then(({ outcome, fetchStartedAt }) => {
               if (fetchStartedAt !== undefined) lastFetchStartedAt = fetchStartedAt;
+              if (stopReason !== 'complete') return;
+              if (this.cancelled) {
+                stopReason = 'cancelled';
+                return;
+              }
               if (outcome === 'success' || outcome === 'waf') {
                 stopReason = outcome;
               } else if (outcome === 'cancelled') {
@@ -211,7 +216,7 @@ export class FireRunner {
   }
 
   private async execute(shot: FireShotState): Promise<{
-    outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled';
+    outcome: 'success' | 'busy' | 'soldout' | 'error' | 'neterr' | 'waf' | 'cancelled' | 'expired';
     fetchStartedAt?: number;
   }> {
     const requestId = toRequestId(this.input.runId, shot.shotId, shot.requestSeq);
@@ -239,10 +244,20 @@ export class FireRunner {
         requestId,
         onFetchStarted,
         setAbort: (abort) => {
-          if (typeof abort === 'function') this.aborts.set(requestId, abort);
+          if (typeof abort !== 'function') return;
+          if (this.cancelled) {
+            try {
+              abort();
+            } catch {
+              // Cancellation must still settle when a late transport abort observer fails.
+            }
+            return;
+          }
+          this.aborts.set(requestId, abort);
         },
       });
       if (shot.state === 'fetch-started') this.transition(shot, 'settled');
+      if (shot.state === 'released' && result.outcome === 'expired') this.transition(shot, 'settled');
       return { outcome: result.outcome, fetchStartedAt };
     } catch {
       if (shot.state === 'fetch-started') this.transition(shot, 'settled');
