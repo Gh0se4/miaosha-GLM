@@ -148,6 +148,7 @@ function injectOverlay() {
   bindFireControlEvents();
 
   var ocrPreferenceRevision = 0;
+  var startupOcrPreferenceRevision = ocrPreferenceRevision;
 
   function poll() { cmdToOverlay('GET_TICKET_COUNT'); }
   setInterval(poll, 1000);
@@ -361,7 +362,7 @@ function injectOverlay() {
   setTimeout(function() { cmdToOverlay('GET_SALE_TIME'); }, 800);
   setTimeout(function() { cmdToOverlay('GET_FIRE_CONFIG'); }, 1000);
   setTimeout(function() { cmdToOverlay('GET_RUNTIME_CALIBRATION'); }, 1200);
-  setTimeout(function() { cmdToOverlay('GET_OCR_AUTO_PREF', { revision: ocrPreferenceRevision }); }, 1400);
+  setTimeout(function() { cmdToOverlay('GET_OCR_AUTO_PREF', { revision: startupOcrPreferenceRevision }); }, 1400);
   setTimeout(function() { cmdToOverlay('OCR_CHECK'); }, 1400);
 
   setTimeout(setupProductUI, 300);

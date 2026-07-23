@@ -120,13 +120,24 @@ describe('OCR automatic preference overlay bridge', () => {
 
   it('ignores a delayed startup preference after a newer user change', () => {
     const harness = createOverlayHarness();
-    harness.runStartupTimers();
     harness.toggle.checked = false;
-
     harness.toggle.dispatchEvent(new Event('change'));
-    harness.dispatchOverlayMessage({ type: 'OCR_AUTO_PREF', enabled: true, revision: 0 });
+    harness.runStartupTimers();
+
+    const startupRequest = harness.messages.find((message) => message.type === 'GET_OCR_AUTO_PREF');
+    harness.dispatchOverlayMessage({
+      type: 'OCR_AUTO_PREF',
+      enabled: true,
+      revision: (startupRequest?.data as { revision?: number })?.revision,
+    });
 
     expect(harness.toggle.checked).toBe(false);
+    expect(startupRequest).toEqual({
+      __cmd: true,
+      type: 'GET_OCR_AUTO_PREF',
+      data: { revision: 0 },
+    });
+    expect(harness.messages.map((message) => message.type)).toContain('OCR_CHECK');
   });
 
   it('applies the canonical value from a failed current-revision update', () => {
