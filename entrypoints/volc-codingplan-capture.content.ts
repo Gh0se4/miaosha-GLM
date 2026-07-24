@@ -159,7 +159,8 @@ export default defineContentScript({
 
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !changes['local:platformCatalog']) return;
-      const catalog = changes['local:platformCatalog'].newValue?.['volcengine-codingplan'];
+      const catalogs = changes['local:platformCatalog'].newValue as Record<string, unknown> | undefined;
+      const catalog = catalogs?.['volcengine-codingplan'];
       if (catalog) {
         postToOverlay({ type: 'VOLC_CATALOG', catalog });
       }

@@ -5,7 +5,7 @@ var _fv_logEl    = null;
 var _fv_cursor   = null;
 var _fv_autoScr  = true;
 var _fv_lineNo   = 0;
-var _fv_counts   = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+var _fv_counts   = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
 var _fv_startMs  = 0;
 var _fv_total    = 0;
 var _fv_done     = 0;
@@ -17,11 +17,17 @@ var _fv_shotsData = [];
 var _fv_waveCount = 0;
 var _fv_nextShotIdx = 0;
 var _fv_currentWaveStartIdx = 0;
+var _fv_persistenceWarningPending = false;
+var _fv_persistenceWarningRendered = false;
+var _fv_dragState = null;
+var _fv_documentDragHandlersBound = false;
+var _FV_PERSISTENCE_WARNING = '日志仅临时保存在内存，刷新页面会丢失';
 
 var _FV_OUTCOME = {
   success:        { user: '成功',     dev: 'ORDER',                  color: '#059669', icon: '✓' },
   busy:           { user: '限流',     dev: '555 / server busy',      color: '#d97706', icon: '⚠' },
   soldout:        { user: '售罄',     dev: 'sold-out',               color: '#64748b', icon: '⊘' },
+  waf:            { user: 'WAF 拦截', dev: 'WAF HTML challenge',     color: '#be123c', icon: '⛔' },
   error:          { user: '错误',     dev: 'code=N / serverMsg',     color: '#dc2626', icon: '✗' },
   neterr:         { user: '网络错误', dev: 'net-err',                color: '#dc2626', icon: '⚡' },
   captchaService: { user: '验证码繁忙', dev: 'Captcha QPS limit',    color: '#7c3aed', icon: '☁' },
@@ -128,8 +134,9 @@ function _fv_buildHTML() {
     '<span style="font-size:15px;display:inline-block;animation:fvFlicker .5s ease-in-out infinite alternate">🔥</span>',
     '<span style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:.1em;text-transform:uppercase;flex:1">Fire Matrix</span>',
     '<span style="font-size:8px;font-weight:800;color:#6366f1;background:rgba(99,102,241,.1);padding:1px 6px;border-radius:999px;border:1px solid rgba(99,102,241,.2);margin-right:4px">v1.5.0</span>',
-    '<span id="' + _NS + 'fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Wave 1</span>',
+    '<span id="' + _NS + 'fv_wave" style="font-size:9px;font-weight:800;color:#fff;background:#6366f1;padding:2px 7px;border-radius:999px">Idle</span>',
     '<span id="' + _NS + 'fv_cnt" style="font-size:9px;color:#475569;margin-right:6px">0/0 shots</span>',
+    '<button id="' + _NS + 'fv_stop" disabled style="border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;border-radius:4px;padding:2px 7px;cursor:not-allowed;font-size:9px;font-weight:800">尚未开始</button>',
     '<button id="' + _NS + 'fv_cls" style="',
       'width:18px;height:18px;border-radius:50%;',
       'border:1px solid #e2e8f0;',
@@ -191,7 +198,7 @@ function _fv_buildHTML() {
     '<span style="flex:1"></span>',
     '<button id="' + _NS + 'fv_cpy" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">COPY</button>',
     '<button id="' + _NS + 'fv_dwn" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">DOWN</button>',
-    '<button id="' + _NS + 'fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">JSON</button>',
+    '<button id="' + _NS + 'fv_json" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">完整日志json</button>',
     '<button id="' + _NS + 'fv_asc" style="font-size:8px;color:#6366f1;border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.06);border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">AUTO ↓</button>',
     '<button id="' + _NS + 'fv_clr" style="font-size:8px;color:#64748b;border:1px solid #e2e8f0;background:#f8fafc;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:700">CLR</button>',
     '</div>',
@@ -251,7 +258,7 @@ function _fv_show(data) {
     _fv_lineNo  = 0;
     _fv_logLines = [];
     _fv_shotsData = [];
-    _fv_counts  = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+    _fv_counts  = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
     _fv_startMs = Date.now();
     _fv_total   = 0;
     _fv_done    = 0;
@@ -262,8 +269,14 @@ function _fv_show(data) {
     _fv_waveCount = 0;
     _fv_nextShotIdx = 0;
     _fv_currentWaveStartIdx = 0;
+    _fv_persistenceWarningRendered = false;
 
     _fv_bindEvents();
+  }
+
+  if (!data) {
+    _fv_renderPersistenceWarning();
+    return;
   }
 
   var chainWrap = document.getElementById(_NS + 'fv_chain');
@@ -289,6 +302,14 @@ function _fv_show(data) {
     totalShots: data.totalShots,
     startMs: data.startMs
   }), '#94a3b8');
+  _fv_renderPersistenceWarning();
+}
+
+function _fv_renderPersistenceWarning() {
+  if (!_fv_persistenceWarningPending || _fv_persistenceWarningRendered) return;
+  if (!document.getElementById(_NS + 'fv')) return;
+  _fv_persistenceWarningRendered = true;
+  _fv_addLine('⚠ ' + _FV_PERSISTENCE_WARNING, '#d97706');
 }
 
 function _fv_updateWaveBadge() {
@@ -408,7 +429,7 @@ function _fv_updateStats() {
   var sb = document.getElementById(_NS + 'fv_sb');
   if (sb) sb.querySelector('b').textContent = String(_fv_counts.busy);
   var se = document.getElementById(_NS + 'fv_se');
-  if (se) se.querySelector('b').textContent = String(_fv_counts.error + _fv_counts.neterr);
+  if (se) se.querySelector('b').textContent = String(_fv_counts.waf + _fv_counts.error + _fv_counts.neterr);
   var sd = document.getElementById(_NS + 'fv_sd');
   if (sd) sd.querySelector('b').textContent = String(_fv_counts.soldout);
   var sc = document.getElementById(_NS + 'fv_sc');
@@ -504,9 +525,46 @@ function _fv_clearLog() {
   }
 }
 
+function _fv_setStopState(active) {
+  var stop = document.getElementById(_NS + 'fv_stop');
+  if (!stop) return;
+  stop.disabled = !active;
+  stop.textContent = active ? '停止' : '尚未开始';
+  stop.style.cursor = active ? 'pointer' : 'not-allowed';
+  stop.style.color = active ? '#be123c' : '#94a3b8';
+  stop.style.borderColor = active ? '#fecaca' : '#e2e8f0';
+  stop.style.background = active ? '#fff1f2' : '#f8fafc';
+}
+
+function _fv_handleDocumentMouseMove(e) {
+  if (!_fv_dragState) return;
+  var panel = document.getElementById(_NS + 'fv');
+  if (!panel) { _fv_dragState = null; return; }
+  panel.style.left = (_fv_dragState.left + e.clientX - _fv_dragState.startX) + 'px';
+  panel.style.top = (_fv_dragState.top + e.clientY - _fv_dragState.startY) + 'px';
+}
+
+function _fv_handleDocumentMouseUp() {
+  _fv_dragState = null;
+}
+
+function _fv_bindDocumentDragEvents() {
+  if (_fv_documentDragHandlersBound) return;
+  _fv_documentDragHandlersBound = true;
+  document.addEventListener('mousemove', _fv_handleDocumentMouseMove);
+  document.addEventListener('mouseup', _fv_handleDocumentMouseUp);
+}
+
 function _fv_bindEvents() {
+  var stop = document.getElementById(_NS + 'fv_stop');
+  if (stop) stop.addEventListener('click', function() {
+    _fv_setStopState(false);
+    window.postMessage({ [MSG_CMD]: true, type: 'CANCEL_FIRE' }, '*');
+  });
+
   var cls = document.getElementById(_NS + 'fv_cls');
   if (cls) cls.addEventListener('click', function() {
+    _fv_dragState = null;
     var ov = document.getElementById(_NS + 'fv');
     if (ov) ov.parentNode && ov.parentNode.removeChild(ov);
     var css = document.getElementById(_NS + 'fc');
@@ -520,7 +578,7 @@ function _fv_bindEvents() {
   if (dwn) dwn.addEventListener('click', _fv_downloadLog);
 
   var json = document.getElementById(_NS + 'fv_json');
-  if (json) { json.addEventListener("click", function() { if (window.__fireLogDownload) { window.__fireLogDownload(); return; } _fv_downloadJson(); }); }
+  if (json) { json.addEventListener('click', _fv_downloadJson); }
 
   var asc = document.getElementById(_NS + 'fv_asc');
   if (asc) asc.addEventListener('click', function() {
@@ -542,29 +600,20 @@ function _fv_bindEvents() {
   }
 
   var hd = document.getElementById(_NS + 'fv_h');
-  var ov = document.getElementById(_NS + 'fv');
-  if (hd && ov) {
-    var ox = 0, oy = 0, left = 0, top = 0, dragging = false;
+  if (hd && document.getElementById(_NS + 'fv')) {
+    _fv_bindDocumentDragEvents();
     hd.addEventListener('mousedown', function(e) {
       if (e.target.tagName === 'BUTTON') return;
-      dragging = true;
-      ox = e.clientX; oy = e.clientY;
-      var r = ov.getBoundingClientRect();
-      left = r.left; top = r.top;
-      ov.style.transition = 'none';
-      ov.style.transform  = 'none';
-      ov.style.left       = left + 'px';
-      ov.style.top        = top  + 'px';
+      var panel = document.getElementById(_NS + 'fv');
+      if (!panel) return;
+      var r = panel.getBoundingClientRect();
+      _fv_dragState = { startX: e.clientX, startY: e.clientY, left: r.left, top: r.top };
+      panel.style.transition = 'none';
+      panel.style.transform  = 'none';
+      panel.style.left       = r.left + 'px';
+      panel.style.top        = r.top  + 'px';
       e.preventDefault();
     });
-    document.addEventListener('mousemove', function(e) {
-      if (!dragging) return;
-      var o = document.getElementById(_NS + 'fv');
-      if (!o) { dragging = false; return; }
-      o.style.left = (left + e.clientX - ox) + 'px';
-      o.style.top  = (top  + e.clientY - oy) + 'px';
-    });
-    document.addEventListener('mouseup', function() { dragging = false; });
   }
 }
 
@@ -572,12 +621,24 @@ window.addEventListener('message', function(e) {
   if (!e.data || !e.data[MSG_OVL]) return;
   var d = e.data;
 
+  if (d.type === 'FIRE_RESULT' && d.data && String(d.data.line || '').indexOf(_FV_PERSISTENCE_WARNING) !== -1) {
+    _fv_persistenceWarningPending = true;
+    _fv_renderPersistenceWarning();
+    return;
+  }
+
   if (d.type === 'FIRE_BATCH_START') {
     _fv_show(d.data);
+    _fv_setStopState(true);
     return;
   }
 
   if (!document.getElementById(_NS + 'fv')) return;
+
+  if (d.type === 'FIRE_LOG_V2_RUN' && d.data && d.data.finishedAt) {
+    _fv_setStopState(false);
+    return;
+  }
 
   if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
     var outcome = d.data.outcome || 'error';
@@ -648,3 +709,7 @@ window.addEventListener('message', function(e) {
     if (cur3) { cur3.style.color = '#dc2626'; cur3.style.animation = ''; }
   }
 });
+
+// Keep the diagnostics available before a purchase starts.  A missing payload
+// creates only the idle panel; the first FIRE_BATCH_START still becomes Wave 1.
+if (document.body) _fv_show();

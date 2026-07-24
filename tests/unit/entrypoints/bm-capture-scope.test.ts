@@ -1,9 +1,345 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
+import * as vm from 'vm';
+import { IDBFactory } from 'fake-indexeddb';
 
 const SOURCE_PATH = path.resolve(__dirname, '../../../entrypoints/bm-capture.content.ts');
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitForValue<T>(read: () => T | undefined, message: string): Promise<T> {
+  return vi.waitFor(() => {
+    const value = read();
+    if (value === undefined) throw new Error(message);
+    return value;
+  }, { interval: 1, timeout: 1_000 });
+}
+
+function createMainLogExportHarness() {
+  const listeners: Array<(event: { data: Record<string, unknown> }) => void> = [];
+  const window: Record<string, unknown> = {
+    addEventListener: (_type: string, listener: (event: { data: Record<string, unknown> }) => void) => listeners.push(listener),
+    postMessage: () => undefined,
+  };
+  const scope = vm.createContext({
+    window,
+    _NS: 'content-export-',
+    MSG_OVL: '__overlay',
+    indexedDB: new IDBFactory(),
+    document: { visibilityState: 'visible', addEventListener: () => undefined },
+    sessionStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
+    navigator: { userAgent: 'test-agent' },
+    location: { href: 'https://example.test/glm-coding' },
+    Intl,
+    Date,
+    Math,
+    Promise,
+    performance: { now: () => 1 },
+    setTimeout: () => 0,
+    postToOverlay: () => undefined,
+  });
+  for (const name of ['11-fire-log-store.js', '12-fire-log.js']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../src/bm-main', name), 'utf8'), scope);
+  }
+
+  return {
+    ingest(messages: Array<Record<string, unknown>>) {
+      for (const message of messages) {
+        if (!['FIRE_LOG_V2_RUN', 'FIRE_LOG_V2_EVENT', 'FIRE_SHOT_RESULT'].includes(String(message.type))) continue;
+        for (const listener of listeners) {
+          listener({ data: { __overlay: true, ...message } });
+        }
+      }
+    },
+    async exportLog() {
+      await Promise.resolve();
+      await Promise.resolve();
+      return (window.__fireLogV2Store as { exportLog(sessionId: string): Promise<Record<string, unknown>> }).exportLog('');
+    },
+  };
+}
+
+function createContentHarness(options: {
+  capture?: Promise<any>;
+  paymentStateFails?: boolean;
+  orderResult?: any;
+  nextSaleTime?: number;
+  runtimeCalibration?: any;
+  shots?: Array<Record<string, unknown>>;
+  orderResults?: any[];
+  burstIntervalMs?: number;
+  returnedTicketCounts?: number[];
+  now?: () => number;
+  monotonicNow?: () => number;
+  onPreparationReady?: () => void;
+  ocrAutoPreference?: unknown;
+  ocrAutoSetPromises?: Promise<void>[];
+  ocrAutoSetRejects?: boolean;
+} = {}) {
+  const listeners: Array<(event: any) => unknown> = [];
+  const activeMessageListeners = new Set<(event: any) => unknown>();
+  const activeTimeouts = new Map<number, number>();
+  const posted: any[] = [];
+  const runnerEvents: string[] = [];
+  const runnerSlotShotIds: string[] = [];
+  const fireRequestShotIds: string[] = [];
+  let pollCalls = 0;
+  let runnerCount = 0;
+  let calibrationCalls = 0;
+  let orderResultIndex = 0;
+  let ocrAutoSetCalls = 0;
+  let nextTimeoutId = 1;
+  let mainWorldFetcher: ((opts: any) => Promise<any>) | undefined;
+  let ocrAutoStored: unknown = options.ocrAutoPreference ?? null;
+  const storageWrites: Array<{ key: string; value: unknown }> = [];
+  let nextSaleTime = options.nextSaleTime ?? Date.now() + 60 * 60 * 1000;
+  const auth = {
+    platform: 'bigmodel',
+    capturedAt: Date.now(),
+    headers: {
+      authorization: 'token',
+      'bigmodel-organization': 'org',
+      'bigmodel-project': 'project',
+    },
+    metadata: { source: 'live-page' },
+  };
+  const storage = {
+    getItem: async (key: string) => {
+      if (key === 'local:paymentState' && options.paymentStateFails) {
+        throw new Error('payment storage unavailable');
+      }
+      if (key === 'local:selectedProducts') {
+        return { priorityList: [{ productId: 'product-1' }] };
+      }
+      if (key === 'local:runtimeCalibration') return options.runtimeCalibration ?? null;
+      if (key === 'local:ocrAutoEnabled') return ocrAutoStored;
+      return null;
+    },
+    setItem: async (key: string, value: unknown) => {
+      if (key === 'local:ocrAutoEnabled') {
+        const pending = options.ocrAutoSetPromises?.[ocrAutoSetCalls++];
+        if (pending) await pending;
+        if (options.ocrAutoSetRejects) throw new Error('OCR preference storage unavailable');
+        ocrAutoStored = value;
+      }
+      storageWrites.push({ key, value });
+    },
+  };
+  let contentScript: any;
+  const window = {
+    sessionStorage: { getItem: () => 'test' },
+    addEventListener: (type: string, listener: (event: any) => unknown) => {
+      if (type === 'message') {
+        listeners.push(listener);
+        activeMessageListeners.add(listener);
+      }
+    },
+    removeEventListener: (type: string, listener: (event: any) => unknown) => {
+      if (type === 'message') activeMessageListeners.delete(listener);
+    },
+    postMessage: (message: any) => {
+      posted.push(message);
+      if (message.type === 'PAYMENT_STATE' && options.paymentStateFails) {
+        throw new Error('payment state delivery unavailable');
+      }
+      if (message.type === 'READ_TICKET_STORE') {
+        queueMicrotask(() => {
+          for (const listener of listeners) {
+            void listener({
+              source: window,
+              data: {
+                teste: true,
+                type: 'TICKET_STORE_DATA',
+                reqId: message.reqId,
+                list: (options.shots ?? [{ ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 }]).map((shot) => ({
+                  ticket: shot.ticket,
+                  randstr: shot.randstr,
+                  createdAt: shot.createdAt,
+                })),
+              },
+            });
+          }
+        });
+      }
+    },
+  };
+  const require = (id: string) => {
+    if (id === '#imports') return {
+      storage,
+      defineContentScript: (config: any) => {
+        contentScript = config;
+        return config;
+      },
+    };
+    if (id.includes('fire-preparation')) return {
+      createFirePreparationCancellation: () => {
+        let cancelled = false;
+        return { get cancelled() { return cancelled; }, cancel: () => { cancelled = true; } };
+      },
+      runAfterFirePreparation: async ({ cancellation, preflight, onReady }: any) => {
+        const value = await preflight();
+        if (cancellation.cancelled) return 'cancelled';
+        options.onPreparationReady?.();
+        await onReady(value);
+        return 'ready';
+      },
+    };
+    if (id.includes('payment-status-notifier')) return { reportPaymentStatus: () => undefined };
+    if (id.includes('fire-runner')) return {
+      FireRunner: class {
+        input: any;
+        constructor(input: any) {
+          this.input = input;
+          runnerCount++;
+          runnerSlotShotIds.push(...input.slots.map((slot: any) => slot.shotId));
+        }
+        cancel() {}
+        async run() {
+          this.input.onEvent({ type: 'tickets_reserved', payload: {} });
+          runnerEvents.push('tickets_reserved');
+          let outcome = 'complete';
+          for (const slot of this.input.slots) {
+            this.input.onEvent({ type: 'shot_released', payload: { runId: this.input.runId, shotId: slot.shotId, requestSeq: slot.requestSeq, plannedAt: slot.plannedAt, scheduledAt: 123, releasedAt: 123 } });
+            const result = await this.input.executeShot({
+              shotId: slot.shotId,
+              requestSeq: slot.requestSeq,
+              requestId: `request-${slot.requestSeq + 1}`,
+              onFetchStarted: () => undefined,
+              setAbort: () => undefined,
+            });
+            runnerEvents.push(result.outcome);
+            if (result.outcome === 'success') outcome = 'success';
+          }
+          let returnedOffset = 0;
+          for (const count of options.returnedTicketCounts ?? []) {
+            const returnedSlots = this.input.slots.slice(returnedOffset, returnedOffset + count);
+            returnedOffset += count;
+            this.input.onEvent({
+              type: 'tickets_returned',
+              payload: {
+                runId: this.input.runId,
+                count: returnedSlots.length,
+                shotIds: returnedSlots.map((slot: any) => slot.shotId),
+                shots: returnedSlots.map((slot: any) => ({
+                  shotId: slot.shotId,
+                  requestSeq: slot.requestSeq,
+                  plannedAt: slot.plannedAt,
+                  terminalUnsentReason: 'cancelled',
+                })),
+              },
+            });
+          }
+          return { accepted: true, reason: outcome };
+        }
+      },
+    };
+    if (id.includes('fire-scheduler')) return {
+      buildFireSchedule: (input: any) => ({ ...input, slots: input.shots.map((shot: any, index: number) => ({ ...shot, requestSeq: index, plannedAt: input.startMs + index * input.intervalMs })) }),
+    };
+    if (id.includes('strike-plan')) return {
+      buildStrikeQueue: ({ tickets, targets }: any) => ({ shots: options.shots ?? [{ ...tickets[0], productId: targets[0].productId, priority: targets[0].priority }] }),
+    };
+    if (id.includes('settings/fire')) return { fireStore: { get: async () => ({ payType: 'ALI', burstIntervalMs: options.burstIntervalMs ?? 2100 }), set: async () => undefined }, FIRE_CONFIG_DEFAULT: { payType: 'ALI', burstIntervalMs: 2100 } };
+    if (id.includes('settings/sale-time')) return { SALE_ALARM_MINUTES: [], SALE_TIME_DEFAULT: {}, getNextSaleTime: () => nextSaleTime, saleTimeStore: { get: async () => ({}) } };
+    if (id.includes('settings/captcha')) return { captchaStore: { get: async () => ({ batchSessionLimit: 100 }) } };
+    if (id.includes('platform/adapters/bigmodel/request')) return {
+      setMainWorldFetcher: (fetcher: (opts: any) => Promise<any>) => { mainWorldFetcher = fetcher; },
+      xhrRequest: async () => { pollCalls++; return { data: { code: 0, data: { status: 'SUCCESS' } } }; },
+    };
+    if (id.includes('platform/shared/stores')) return { createAuthStore: () => ({ get: () => null, set: async () => undefined }) };
+    if (id.includes('platform')) return {
+      bigmodelAdapter: {
+        authProbe: { capture: () => options.capture ?? Promise.resolve(auth), isAuthenticated: async () => true },
+        orderPipeline: { run: async (_ctx: any, _auth: any, fireRequest: any) => {
+          fireRequestShotIds.push(fireRequest.shotId);
+          const orderResult = options.orderResults?.[orderResultIndex++] ?? options.orderResult;
+          const resultTiming = orderResult?.metadata?.transport?.timing;
+          fireRequest?.onFetchStarted?.({
+            requestId: fireRequest.requestId,
+            timing: resultTiming ?? { bridgeReceivedAt: 1, bridgeReceivedPerfMs: 1, fetchCalledAt: 2, fetchCalledPerfMs: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
+          });
+          return await (orderResult ?? ({ success: true, data: { bizId: 'biz-1', amount: 1, productId: 'product-1' } }));
+        } },
+      },
+    };
+    if (id.includes('runtime-calibration')) return { calibrate: async () => { calibrationCalls++; return {}; } };
+    throw new Error(`Unexpected import: ${id}`);
+  };
+  const document = {
+    head: { appendChild: () => undefined },
+    documentElement: { appendChild: () => undefined },
+    createElement: () => ({ remove: () => undefined }),
+    getElementById: () => null,
+  };
+  const chrome = {
+    runtime: { id: 'test', getURL: () => '', onMessage: { addListener: () => undefined } },
+    storage: { local: {}, onChanged: { addListener: () => undefined } },
+  };
+  const source = ts.transpileModule(fs.readFileSync(SOURCE_PATH, 'utf-8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(source, {
+    require,
+    exports: {},
+    defineContentScript: (config: any) => {
+      contentScript = config;
+      return config;
+    },
+    window,
+    document,
+    chrome,
+    console,
+    Date: options.now ? class extends Date { static now() { return options.now!(); } } : Date,
+    performance: { now: () => options.monotonicNow?.() ?? options.now?.() ?? 1 },
+    Promise,
+    Map,
+    Set,
+    Math,
+    JSON,
+    Error,
+    queueMicrotask,
+    setTimeout: (_callback: () => void, delay = 0) => {
+      const id = nextTimeoutId++;
+      activeTimeouts.set(id, Number(delay));
+      return id;
+    },
+    clearTimeout: (id: number) => { activeTimeouts.delete(id); },
+    setInterval: () => 0,
+    clearInterval: () => undefined,
+  });
+
+  return {
+    posted,
+    storageWrites,
+    get ocrAutoStored() { return ocrAutoStored; },
+    runnerEvents,
+    runnerSlotShotIds,
+    fireRequestShotIds,
+    get pollCalls() { return pollCalls; },
+    get runnerCount() { return runnerCount; },
+    get calibrationCalls() { return calibrationCalls; },
+    get activeMessageListenerCount() { return activeMessageListeners.size; },
+    activeTimeoutCount(delay?: number) {
+      return [...activeTimeouts.values()].filter((value) => delay === undefined || value === delay).length;
+    },
+    async fetchThroughMainWorld(opts: any) {
+      if (!mainWorldFetcher) throw new Error('MAIN world fetcher was not registered');
+      return mainWorldFetcher(opts);
+    },
+    setNextSaleTime(value: number) { nextSaleTime = value; },
+    async start() { await contentScript.main(); },
+    async command(type: string, data?: any) {
+      const pending = listeners.map((listener) => listener({ source: window, data: { testc: true, type, data } }));
+      await Promise.all(pending);
+    },
+  };
+}
 
 describe('bm-capture.content.ts scope regression', () => {
   it('safeGet and safeSet are declared at module scope', () => {
@@ -143,5 +479,735 @@ describe('bm-capture.content.ts scope regression', () => {
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it('keeps success feedback and payment polling when payment persistence rejects', async () => {
+    const harness = createContentHarness({ paymentStateFails: true });
+    await harness.start();
+
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await Promise.resolve();
+
+    expect(harness.runnerEvents).toContain('success');
+    expect(harness.posted.some((message) => message.type === 'BURST_FIRE_SUCCESS')).toBe(true);
+    expect(harness.posted.some((message) => message.type === 'FIRE_SHOT_RESULT' && message.data?.outcome === 'success')).toBe(true);
+    expect(harness.pollCalls).toBeGreaterThan(0);
+  });
+
+  it('loads when chrome.runtime does not expose getManifest', async () => {
+    const harness = createContentHarness();
+    await expect(harness.start()).resolves.toBeUndefined();
+  });
+
+  it('defaults the OCR automatic preference to enabled when storage is empty', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+
+    await harness.command('GET_OCR_AUTO_PREF', { revision: 7 });
+
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: true,
+      revision: 7,
+    });
+  });
+
+  it('returns the stored disabled OCR automatic preference', async () => {
+    const harness = createContentHarness({ ocrAutoPreference: false });
+    await harness.start();
+
+    await harness.command('GET_OCR_AUTO_PREF');
+
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: false,
+    });
+  });
+
+  it('persists and echoes the canonical OCR automatic preference', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+
+    await harness.command('SET_OCR_AUTO_PREF', { enabled: false, revision: 3 });
+
+    expect(harness.storageWrites).toContainEqual({ key: 'local:ocrAutoEnabled', value: false });
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: false,
+      revision: 3,
+      persisted: true,
+    });
+  });
+
+  it('serializes rapid OCR preference writes so the last received intent wins', async () => {
+    const firstWrite = deferred<void>();
+    const secondWrite = deferred<void>();
+    const harness = createContentHarness({
+      ocrAutoSetPromises: [firstWrite.promise, secondWrite.promise],
+    });
+    await harness.start();
+
+    const firstCommand = harness.command('SET_OCR_AUTO_PREF', { enabled: false, revision: 1 });
+    const secondCommand = harness.command('SET_OCR_AUTO_PREF', { enabled: true, revision: 2 });
+    secondWrite.resolve();
+    firstWrite.resolve();
+    await Promise.all([firstCommand, secondCommand]);
+
+    expect(harness.ocrAutoStored).toBe(true);
+    expect(harness.storageWrites.filter((write) => write.key === 'local:ocrAutoEnabled')).toEqual([
+      { key: 'local:ocrAutoEnabled', value: false },
+      { key: 'local:ocrAutoEnabled', value: true },
+    ]);
+  });
+
+  it('reports the stored OCR preference when persistence rejects without throwing', async () => {
+    const harness = createContentHarness({
+      ocrAutoPreference: false,
+      ocrAutoSetRejects: true,
+    });
+    await harness.start();
+
+    await expect(harness.command('SET_OCR_AUTO_PREF', { enabled: true, revision: 9 })).resolves.toBeUndefined();
+
+    expect(harness.posted.find((message) => message.type === 'OCR_AUTO_PREF')).toMatchObject({
+      type: 'OCR_AUTO_PREF',
+      enabled: false,
+      revision: 9,
+      persisted: false,
+    });
+  });
+
+  it('forwards automatic ticket diagnostics as structured V2 log events', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    const nextSaleTime = 2_000_000;
+    const diagnostics = [
+      { type: 'refresh_scheduled', nextSaleTime, timestamp: 100, reason: 'timer_scheduled', details: { refreshAt: 200, delayMs: 100 } },
+      { type: 'refresh_skipped', nextSaleTime, timestamp: 200, reason: 'already_refreshed', details: { refreshAt: 200 } },
+      { type: 'refresh_triggered', nextSaleTime, timestamp: 200, reason: 'timer_elapsed', details: { refreshAt: 200 } },
+      { type: 'window_started', nextSaleTime, timestamp: 300, reason: 'window_opened', details: { startAt: 300, stopAt: 400 } },
+      { type: 'window_stopped', nextSaleTime, timestamp: 400, reason: 'window_elapsed', details: { startAt: 300, stopAt: 400 } },
+    ];
+
+    for (const diagnostic of diagnostics) {
+      await harness.command('AUTO_TICKET_DIAGNOSTIC', diagnostic);
+    }
+
+    const diagnosticTypes = new Set(diagnostics.map((diagnostic) => diagnostic.type));
+    expect(harness.posted
+      .filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && diagnosticTypes.has(message.data?.type))
+      .map((message) => message.data))
+      .toEqual(diagnostics);
+  });
+
+  it('cancels an auth-preparing auto run before it reserves tickets or fetches', async () => {
+    const capture = deferred<any>();
+    const harness = createContentHarness({ capture: capture.promise });
+    await harness.start();
+
+    const preparing = harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await Promise.resolve();
+    await harness.command('CANCEL_FIRE');
+    capture.resolve({
+      platform: 'bigmodel',
+      capturedAt: Date.now(),
+      headers: { authorization: 'token', 'bigmodel-organization': 'org', 'bigmodel-project': 'project' },
+      metadata: { source: 'live-page' },
+    });
+    await preparing;
+
+    expect(harness.runnerCount).toBe(0);
+    expect(harness.runnerEvents).not.toContain('tickets_reserved');
+    expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
+  });
+
+  it('does not dispatch or leak relay resources when onAbortReady aborts synchronously', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    const listenersBefore = harness.activeMessageListenerCount;
+    const relayTimeoutsBefore = harness.activeTimeoutCount(8_000);
+
+    const relay = harness.fetchThroughMainWorld({
+      method: 'POST',
+      url: 'https://bigmodel.cn/api/biz/pay/preview',
+      headers: {},
+      requestId: 'sync-abort-request',
+      onAbortReady: (abort: () => void) => abort(),
+    });
+
+    await expect(relay).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'MAIN world fetch aborted',
+    });
+    const relayMessages = harness.posted.filter(
+      (message) => message.requestId === 'sync-abort-request',
+    );
+    expect(relayMessages.filter((message) => message.type === 'DO_FETCH_CANCEL')).toHaveLength(1);
+    expect(relayMessages.filter((message) => message.type === 'DO_FETCH')).toEqual([]);
+    expect(harness.activeMessageListenerCount).toBe(listenersBefore);
+    expect(harness.activeTimeoutCount(8_000)).toBe(relayTimeoutsBefore);
+  });
+
+  it('expires a snapshotted ticket immediately before fetch, drops it, and continues with a fresh slot', async () => {
+    let now = 300_000;
+    const harness = createContentHarness({
+      now: () => now,
+      onPreparationReady: () => { now = 300_001; },
+      shots: [
+        { ticket: 'ticket-expiring', randstr: 'rand-expiring', createdAt: 1, productId: 'product-expiring', priority: 1 },
+        { ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000, productId: 'product-fresh', priority: 2 },
+      ],
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: { classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' } },
+      },
+      returnedTicketCounts: [1],
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_FIRE', { startMs: now, reason: 'manual' });
+
+    const expiredShot = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_SHOT_RESULT' && message.data?.outcome === 'expired',
+      ),
+      'expired shot result was not posted',
+    );
+    expect(expiredShot.data).toMatchObject({
+      productId: 'product-expiring',
+      outcome: 'expired',
+      terminalUnsentReason: 'expired',
+    });
+    expect(expiredShot.data?.timing).toBeUndefined();
+    expect(harness.posted.some(
+      (message) => message.type === 'FIRE_RESULT' && String(message.line).includes('expired'),
+    )).toBe(true);
+    expect(harness.runnerEvents).toContain('expired');
+    expect(harness.fireRequestShotIds).toEqual([expect.stringMatching(/:shot-1$/)]);
+    expect(harness.posted.some((message) => message.type === 'DO_FETCH')).toBe(false);
+
+    await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned',
+      ),
+      'returned-ticket event was not posted',
+    );
+    const lastTicketStoreWrite = harness.posted
+      .filter((message) => message.type === 'WRITE_TICKET_STORE')
+      .at(-1);
+    expect((lastTicketStoreWrite?.list || []).some(
+      (ticket: any) => ticket.ticket === 'ticket-expiring',
+    )).toBe(false);
+  });
+
+  it('counts only fresh tickets actually restored from a mixed returned event', async () => {
+    let now = 300_000;
+    const harness = createContentHarness({
+      now: () => now,
+      onPreparationReady: () => { now = 300_001; },
+      shots: [
+        { ticket: 'ticket-expired', randstr: 'rand-expired', createdAt: 1, productId: 'product-expired', priority: 1 },
+        { ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000, productId: 'product-fresh', priority: 2 },
+      ],
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: { classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' } },
+      },
+      returnedTicketCounts: [2],
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_FIRE', { startMs: now, reason: 'manual' });
+
+    const returnedEvent = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned',
+      )?.data,
+      'mixed returned-ticket event was not posted',
+    );
+    expect(returnedEvent).toMatchObject({
+      count: 1,
+      ticketReturnCount: 1,
+      shotIds: [expect.stringMatching(/:shot-1$/)],
+      shots: [expect.objectContaining({ shotId: expect.stringMatching(/:shot-1$/) })],
+    });
+
+    const returnedRun = await waitForValue(
+      () => harness.posted.find(
+        (message) => message.type === 'FIRE_LOG_V2_RUN'
+          && !('mode' in (message.data || {}))
+          && typeof message.data?.ticketsReturned === 'number',
+      )?.data,
+      'returned-ticket run update was not posted',
+    );
+    expect(returnedRun).toMatchObject({ ticketReturnCount: 1, ticketsReturned: 1 });
+
+    const restoredTickets = harness.posted
+      .filter((message) => message.type === 'WRITE_TICKET_STORE')
+      .at(-1)?.list || [];
+    expect(restoredTickets).toEqual([
+      expect.objectContaining({ ticket: 'ticket-fresh', randstr: 'rand-fresh', createdAt: 150_000 }),
+    ]);
+  });
+
+  it('records a quiet-window entry once per sale and records again for the next sale', async () => {
+    const now = Date.now();
+    const harness = createContentHarness({ nextSaleTime: now + 60 * 60 * 1000 });
+    await harness.start();
+    const calibrationCallsBeforeQuietWindow = harness.calibrationCalls;
+    harness.setNextSaleTime(now + 5 * 60 * 1000);
+
+    await harness.command('GET_RUNTIME_CALIBRATION');
+    await harness.command('GET_RUNTIME_CALIBRATION');
+    harness.setNextSaleTime(now + 4 * 60 * 1000);
+    await harness.command('GET_RUNTIME_CALIBRATION');
+
+    const quietEntries = harness.posted.filter((message) => message.type === 'calibration_quiet_window_entered');
+    expect(harness.calibrationCalls).toBe(calibrationCallsBeforeQuietWindow);
+    expect(quietEntries.map((message) => message.data?.nextSaleTime)).toEqual([
+      now + 5 * 60 * 1000,
+      now + 4 * 60 * 1000,
+    ]);
+  });
+
+  it('keeps legacy cached RTT compensation available while calibration is quiet', async () => {
+    const harness = createContentHarness({
+      nextSaleTime: Date.now() + 4 * 60 * 1000,
+      runtimeCalibration: {
+        latencyMs: 321,
+        clockOffsetMs: -17,
+        sampleCount: 6,
+        calibratedAt: 123,
+        reason: 'legacy-cache',
+      },
+    });
+
+    await harness.start();
+    await harness.command('GET_RUNTIME_CALIBRATION');
+
+    expect(harness.calibrationCalls).toBe(0);
+    expect(harness.posted.find((message) => message.type === 'RUNTIME_CALIBRATION')?.data).toMatchObject({
+      rttCompensationMs: 321,
+      latencyMs: 321,
+      clockOffsetMs: -17,
+      sampleCount: 6,
+      reason: 'legacy-cache',
+    });
+  });
+
+  it.each([
+    ['busy', { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' }],
+    ['soldout', { outcome: 'soldout', code: 200, serverMsg: 'sold out', rawServerMsg: 'sold out' }],
+  ])('includes classified responsibility in the %s legacy shot payload', async (_outcome, classified) => {
+    const responsibility = { source: 'client-side-classification', subject: 'client', target: 'request', cause: 'inference' };
+    const harness = createContentHarness({
+      orderResult: { success: false, error: classified.serverMsg, metadata: { classified: { ...classified, responsibility } } },
+    });
+    await harness.start();
+
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await Promise.resolve();
+
+    expect(harness.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data).toMatchObject({
+      outcome: classified.outcome,
+      responsibility,
+    });
+  });
+
+  it('records scheduler and transport metrics from MAIN-world timestamps', async () => {
+    const harness = createContentHarness({
+      orderResult: {
+        success: false,
+        error: 'busy',
+        metadata: {
+          classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' },
+          transport: {
+            status: 555,
+            timing: {
+              bridgeReceivedAt: 1_001,
+              bridgeReceivedPerfMs: 1,
+              fetchCalledAt: 1_005,
+              fetchCalledPerfMs: 5,
+              responseHeadersAt: 1_015,
+              bodyCompletedAt: 1_020,
+            },
+          },
+        },
+      },
+    });
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: 1_000 });
+
+    expect(harness.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data).toMatchObject({
+      plannedAt: 1_000,
+      scheduleErrorMs: 5,
+      queueDelayMs: 5,
+      bridgeWaitMs: 4,
+      fetchToHeadersMs: 10,
+      responseBodyMs: 5,
+      transportTotalMs: 19,
+    });
+  });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 960, reason: 'manual' }],
+    ['auto', 'PREFIRE_PREPARE', { fireStartMs: 960 }],
+  ])('exports %s second-shot queue delay from the previous actual fetch anchor', async (_mode, command, data) => {
+    const busyAt = (fetchCalledAt: number) => ({
+      success: false,
+      error: 'busy',
+      metadata: {
+        classified: { outcome: 'busy', code: 555, serverMsg: 'busy', rawServerMsg: 'busy' },
+        transport: {
+          status: 555,
+          timing: {
+            bridgeReceivedAt: fetchCalledAt - 1,
+            fetchCalledAt,
+            responseHeadersAt: fetchCalledAt + 1,
+            bodyCompletedAt: fetchCalledAt + 2,
+          },
+        },
+      },
+    });
+    const content = createContentHarness({
+      burstIntervalMs: 50,
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+      ],
+      orderResults: [busyAt(1_005), busyAt(1_060)],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
+    const second = report.shots.find((shot) => String(shot.shotId).endsWith(':shot-1'));
+    expect(second).toMatchObject({
+      plannedAt: 1_010,
+      timing: { fetchCalledAt: 1_060 },
+      queueDelayMs: 5,
+    });
+  });
+
+  it('exports delayed burst shots without a queue-delay metric', async () => {
+    const content = createContentHarness({
+      burstIntervalMs: 50,
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+      ],
+      orderResults: [
+        { success: false, error: 'busy', metadata: { classified: { outcome: 'busy', code: 555 }, transport: { status: 555, timing: { bridgeReceivedAt: 1_004, fetchCalledAt: 1_005 } } } },
+        { success: false, error: 'busy', metadata: { classified: { outcome: 'busy', code: 555 }, transport: { status: 555, timing: { bridgeReceivedAt: 1_059, fetchCalledAt: 1_060 } } } },
+      ],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, unknown>> };
+    const delayedSecond = report.shots.find((shot) => String(shot.shotId).endsWith(':shot-1'));
+    expect(delayedSecond).toMatchObject({ mode: 'burst', plannedAt: 1_500, timing: { fetchCalledAt: 1_060 } });
+    expect(delayedSecond).not.toHaveProperty('queueDelayMs');
+  });
+
+  it('emits a run-scoped shot identifier for V2 persistence', async () => {
+    let now = 10_000;
+    const content = createContentHarness({ now: () => now++ });
+    const main = createMainLogExportHarness();
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT'),
+      'manual shot result was not posted',
+    );
+    main.ingest(content.posted);
+
+    const report = await main.exportLog() as { shots: Array<Record<string, string>> };
+    expect(report.shots).toHaveLength(1);
+    expect(report.shots.every((shot) => shot.shotId === `${shot.runId}:shot-0`)).toBe(true);
+  });
+
+  it('uses one canonical run-scoped shot identifier through scheduling, lifecycle, transport, and export', async () => {
+    let now = 20_000;
+    const content = createContentHarness({ now: () => now++ });
+    const main = createMainLogExportHarness();
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    const shotResult = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_SHOT_RESULT')?.data,
+      'canonical shot result was not posted',
+    );
+    const released = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'shot_released')?.data,
+      'canonical shot release was not posted',
+    );
+    main.ingest(content.posted);
+
+    const expectedShotId = `${shotResult.runId}:shot-0`;
+    const report = await main.exportLog() as { shots: Array<Record<string, string>> };
+
+    expect(content.runnerSlotShotIds).toEqual([expectedShotId]);
+    expect(content.fireRequestShotIds).toEqual([expectedShotId]);
+    expect(released?.shotId).toBe(expectedShotId);
+    expect(shotResult.shotId).toBe(expectedShotId);
+    expect(report.shots[0]?.shotId).toBe(expectedShotId);
+  });
+
+  it('keeps scheduler shot identifiers unique across runs', async () => {
+    let now = 30_000;
+    const content = createContentHarness({ now: () => now++, returnedTicketCounts: [1] });
+    await content.start();
+
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await waitForValue(
+      () => content.runnerSlotShotIds.length === 1
+        && content.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned').length === 1
+        ? true
+        : undefined,
+      'first run did not finish returning its ticket',
+    );
+    await content.command('PREFIRE_FIRE', { startMs: 2_000, reason: 'manual' });
+    await waitForValue(
+      () => content.runnerSlotShotIds.length === 2
+        && content.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned').length === 2
+        ? true
+        : undefined,
+      'second run did not finish returning its ticket',
+    );
+
+    expect(content.runnerSlotShotIds).toHaveLength(2);
+    expect(new Set(content.runnerSlotShotIds).size).toBe(2);
+    expect(content.runnerSlotShotIds.every((shotId) => /^manual-\d+:shot-0$/.test(shotId))).toBe(true);
+  });
+
+  it('emits run-scoped identifiers for cancelled tickets returned to the V2 log', async () => {
+    const content = createContentHarness({ returnedTicketCounts: [1] });
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+
+    const returned = await waitForValue(
+      () => content.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'tickets_returned')?.data,
+      'returned-ticket event was not posted',
+    );
+    const expectedShotId = `${returned.runId}:shot-0`;
+    expect(returned).toMatchObject({
+      runId: expect.any(String),
+      shotIds: [expectedShotId],
+      shots: [expect.objectContaining({ shotId: expectedShotId })],
+    });
+  });
+
+  it('exports the content run trigger source and cumulative returned-ticket count', async () => {
+    const content = createContentHarness({
+      returnedTicketCounts: [1, 2],
+      shots: [
+        { ticket: 'ticket-1', randstr: 'rand-1', createdAt: Date.now(), productId: 'product-1', priority: 1 },
+        { ticket: 'ticket-2', randstr: 'rand-2', createdAt: Date.now(), productId: 'product-2', priority: 2 },
+        { ticket: 'ticket-3', randstr: 'rand-3', createdAt: Date.now(), productId: 'product-3', priority: 3 },
+      ],
+    });
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command('PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(content.posted).toContainEqual(expect.objectContaining({ type: 'FIRE_LOG_V2_RUN' }));
+    main.ingest(content.posted);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const report = await main.exportLog() as { runs: Array<Record<string, unknown>> };
+    expect(report.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        mode: 'manual',
+        triggerSource: 'manual',
+        ticketReturnCount: 3,
+        ticketsReturned: 3,
+      }),
+    ]));
+  });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' }],
+    ['burst', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' }],
+    ['auto', 'PREFIRE_PREPARE', { fireStartMs: 1_000 }],
+  ])('exports %s as its unambiguous trigger source', async (triggerSource, command, data) => {
+    const content = createContentHarness();
+    const main = createMainLogExportHarness();
+    await content.start();
+    await content.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    main.ingest(content.posted);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const report = await main.exportLog() as { runs: Array<Record<string, unknown>> };
+    expect(report.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ mode: triggerSource, triggerSource }),
+    ]));
+  });
+
+  it('persists a cancelled result after the MAIN fetch has already started', async () => {
+    const pending = deferred<any>();
+    const harness = createContentHarness({ orderResult: pending.promise });
+    await harness.start();
+
+    const firing = harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await harness.command('CANCEL_FIRE');
+    pending.resolve({
+      success: false,
+      metadata: {
+        transport: {
+          status: 499,
+          statusText: 'Client Closed Request',
+          headers: { 'x-trace': 'trace-1' },
+          body: '{"cancelled":true}',
+          timing: { bridgeReceivedAt: 1, fetchCalledAt: 2, responseHeadersAt: 3, bodyCompletedAt: 4 },
+          request: { method: 'POST', url: 'https://bigmodel.cn/api/biz/pay/preview', headers: { Authorization: 'secret' }, body: '{"ticket":"ticket-1"}' },
+        },
+      },
+    });
+    await firing;
+
+    const aborted = await waitForValue(
+      () => harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_aborted')?.data,
+      'fetch-aborted event was not posted',
+    );
+    const expectedShotId = `${aborted.runId}:shot-0`;
+    expect(aborted).toMatchObject({
+      type: 'fetch_aborted', runId: expect.any(String), shotId: expectedShotId,
+      shot: expect.objectContaining({ outcome: 'cancelled', shotId: expectedShotId, releasedAt: 123, timing: expect.objectContaining({ fetchCalledAt: 2 }) }),
+    });
+  });
+
+  it('records prepare start and all auto target timing components in the V2 run', async () => {
+    const harness = createContentHarness();
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', {
+      targetMs: 10_000, fireStartMs: 9_100, preparationLeadMs: 3_000,
+      rttCompensationMs: 700, clockOffsetMs: 200, earlyOffsetMs: 10,
+    });
+
+    const prepare = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    const run = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_RUN' && message.data?.mode === 'auto');
+    expect(prepare?.data).toMatchObject({ runId: expect.any(String), wallClockMs: expect.any(Number), monotonicMs: expect.any(Number) });
+    expect(run?.data).toMatchObject({
+      nextSaleTime: 10_000, targetMs: 10_000, startMs: 9_100, preparationLeadMs: 3_000,
+      rttCompensationMs: 700, clockOffsetMs: 200, earlyOffsetMs: 10,
+    });
+  });
+
+  it.each([
+    ['auto', 'PREFIRE_PREPARE', { targetMs: 10_000, fireStartMs: 9_100, preparationLeadMs: 3_000 }, 3_000],
+    ['manual', 'PREFIRE_FIRE', { startMs: 9_100, reason: 'manual' }, 0],
+    ['burst', 'PREFIRE_FIRE', { startMs: 9_100, reason: 'burst' }, 0],
+  ])('exports configured preparation timing for a %s run', async (_mode, command, data, preparationLeadMs) => {
+    let now = 1_000;
+    const capture = deferred<any>();
+    const harness = createContentHarness({
+      capture: capture.promise,
+      now: () => now,
+      onPreparationReady: () => { now = 1_250; },
+    });
+    await harness.start();
+    const preparing = harness.command(command, data);
+    now = 1_200;
+    capture.resolve({
+      platform: 'bigmodel',
+      capturedAt: 1_000,
+      headers: { authorization: 'token', 'bigmodel-organization': 'org', 'bigmodel-project': 'project' },
+      metadata: { source: 'live-page' },
+    });
+    await preparing;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const preparation = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    const exporter = createMainLogExportHarness();
+    exporter.ingest(harness.posted);
+    const report = await exporter.exportLog();
+    const run = (report.runs as Array<Record<string, unknown>>).find((record) => record.mode === _mode);
+    expect(preparation?.data).toMatchObject({ wallClockMs: 1_000 });
+    expect(run).toMatchObject({
+      preparationLeadMs,
+      preparationStartedAt: 1_000,
+      preparationDurationMs: 250,
+    });
+  });
+
+  it('uses the command-entry clocks when the wall clock changes during auth preparation', async () => {
+    let wallClockMs = 1_000;
+    let monotonicMs = 100;
+    const capture = deferred<any>();
+    const harness = createContentHarness({
+      capture: capture.promise,
+      now: () => wallClockMs,
+      monotonicNow: () => monotonicMs,
+      onPreparationReady: () => {
+        wallClockMs = 850;
+        monotonicMs = 350;
+      },
+    });
+    await harness.start();
+
+    const preparing = harness.command('PREFIRE_PREPARE', { fireStartMs: 9_100 });
+    wallClockMs = 800;
+    monotonicMs = 300;
+    capture.resolve({
+      platform: 'bigmodel',
+      capturedAt: 1_000,
+      headers: { authorization: 'token', 'bigmodel-organization': 'org', 'bigmodel-project': 'project' },
+      metadata: { source: 'live-page' },
+    });
+    await preparing;
+
+    const preparations = harness.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    const run = harness.posted.find((message) => message.type === 'FIRE_LOG_V2_RUN' && message.data?.mode === 'auto');
+    expect(preparations).toHaveLength(1);
+    expect(preparations[0].data).toMatchObject({ wallClockMs: 1_000, monotonicMs: 100 });
+    expect(Number.isFinite(run?.data?.preparationDurationMs)).toBe(true);
+    expect(run?.data).toMatchObject({ preparationStartedAt: 1_000, preparationDurationMs: 250 });
+  });
+
+  it('records a timed-out started request as a V2 timeout shot', async () => {
+    const harness = createContentHarness({ orderResult: Promise.resolve({
+      success: false,
+      metadata: { transportFailure: 'timeout', classified: { outcome: 'neterr', code: 0, serverMsg: 'timeout', rawServerMsg: 'timeout' } },
+    }) });
+    await harness.start();
+    await harness.command('PREFIRE_PREPARE', { fireStartMs: Date.now() });
+
+    const timedOut = await waitForValue(
+      () => harness.posted.find((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'fetch_timed_out')?.data,
+      'fetch-timeout event was not posted',
+    );
+    const expectedShotId = `${timedOut.runId}:shot-0`;
+    expect(timedOut).toMatchObject({
+      type: 'fetch_timed_out', shotId: expectedShotId,
+      shot: expect.objectContaining({ outcome: 'timed_out', shotId: expectedShotId }),
+    });
+  });
+
+  it.each([
+    ['manual', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'manual' }],
+    ['burst', 'PREFIRE_FIRE', { startMs: 1_000, reason: 'burst' }],
+    ['auto', 'PREFIRE_PREPARE', { targetMs: 2_000, fireStartMs: 1_000, preparationLeadMs: 3_000, rttCompensationMs: 7, clockOffsetMs: 2, earlyOffsetMs: 10 }],
+  ])('records exactly one preparation-start event for an active %s run', async (_mode, command, data) => {
+    const harness = createContentHarness();
+    await harness.start();
+    await harness.command(command, data);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const preparations = harness.posted.filter((message) => message.type === 'FIRE_LOG_V2_EVENT' && message.data?.type === 'run_prepare_started');
+    expect(preparations).toHaveLength(1);
+    expect(preparations[0].data).toMatchObject({ runId: expect.any(String), wallClockMs: expect.any(Number), monotonicMs: expect.any(Number) });
+    if (_mode === 'auto') expect(preparations[0].data?.details).toMatchObject({ targetMs: 2_000, earlyOffsetMs: 10 });
   });
 });

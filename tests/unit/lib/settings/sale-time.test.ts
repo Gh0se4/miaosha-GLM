@@ -30,7 +30,7 @@ describe('saleTimeStore', () => {
 
   describe('set / get roundtrip', () => {
     it('persists a custom config', async () => {
-      const custom = { hour: 9, minute: 59, second: 59, ms: 999, timezone: 'Asia/Tokyo' };
+      const custom = { hour: 9, minute: 59, second: 59, ms: 999, timezone: 'Asia/Tokyo', soundEnabled: false };
       await saleTimeStore.set(custom);
       const retrieved = await saleTimeStore.get();
       expect(retrieved.hour).toBe(9);

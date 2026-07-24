@@ -1,9 +1,36 @@
+export interface MainWorldFetchStartedTiming {
+  bridgeReceivedAt: number;
+  bridgeReceivedPerfMs: number;
+  fetchCalledAt: number;
+  fetchCalledPerfMs: number;
+}
+
+export interface MainWorldTransportTiming extends MainWorldFetchStartedTiming {
+  responseHeadersAt: number;
+  bodyCompletedAt: number;
+}
+
 export interface XhrRequestOptions {
   method?: string;
   url: string;
   headers?: Record<string, string>;
   body?: string;
   withCredentials?: boolean;
+  requestId?: string;
+  runId?: string;
+  shotId?: string;
+  onFetchStarted?: (meta: { timing: MainWorldFetchStartedTiming; requestId: string }) => void;
+  onAbortReady?: (abort: () => void) => void;
+}
+
+/**
+ * Lifecycle callbacks belong to the isolated world.  postMessage uses the
+ * structured-clone algorithm, so forwarding them to MAIN would reject the
+ * entire request before fetch is called.
+ */
+export function toMainWorldFetchOptions(opts: XhrRequestOptions): Omit<XhrRequestOptions, 'onFetchStarted' | 'onAbortReady'> {
+  const { onFetchStarted: _onFetchStarted, onAbortReady: _onAbortReady, ...messageOptions } = opts;
+  return messageOptions;
 }
 
 export interface XhrResponse<T = unknown> {
@@ -11,6 +38,25 @@ export interface XhrResponse<T = unknown> {
   statusText: string;
   data: T;
   headers: Record<string, string>;
+  timing: MainWorldTransportTiming;
+  requestId?: string;
+  runId?: string;
+  shotId?: string;
+  /** Unparsed response body retained for diagnostics; callers may parse `data`. */
+  body?: string;
+}
+
+function localTiming(): MainWorldTransportTiming {
+  const now = Date.now();
+  const perfNow = typeof performance === 'undefined' ? now : performance.now();
+  return {
+    bridgeReceivedAt: now,
+    bridgeReceivedPerfMs: perfNow,
+    fetchCalledAt: now,
+    fetchCalledPerfMs: perfNow,
+    responseHeadersAt: now,
+    bodyCompletedAt: now,
+  };
 }
 
 function isExtensionContext(): boolean {
@@ -54,6 +100,11 @@ function sendBackgroundRequest<T>(opts: XhrRequestOptions): Promise<XhrResponse<
           statusText: res.statusText,
           data,
           headers: res.headers || {},
+          timing: localTiming(),
+          requestId: opts.requestId,
+          runId: opts.runId,
+          shotId: opts.shotId,
+          body: res.body,
         });
       },
     );
@@ -94,6 +145,11 @@ function xhrRequestImpl<T>(opts: XhrRequestOptions): Promise<XhrResponse<T>> {
         statusText: xhr.statusText,
         data,
         headers,
+        timing: localTiming(),
+        requestId: opts.requestId,
+        runId: opts.runId,
+        shotId: opts.shotId,
+        body: xhr.responseText,
       });
     };
 

@@ -7,12 +7,16 @@
 //    already has to fetch this endpoint; reusing its response lets us avoid a
 //    duplicate request that often gets rejected with WAF/rate-limit code 555
 //    while the page's request succeeds.
-// 3. Generates a random session namespace (_NS) to avoid static detection of
-//    injected DOM IDs, postMessage markers, and storage keys.
+// 3. Reuses the tab's session namespace (_NS), or generates one when absent,
+//    to avoid static detection of injected DOM IDs, postMessage markers, and storage keys.
 (function() {
   // ── Namespace generation ────────────────────────────────────────────
-  var _NS = 'b' + Math.random().toString(36).slice(2, 8);
-  try { sessionStorage.setItem('_st', _NS); } catch(e) {}
+  var _NS = '';
+  try { _NS = sessionStorage.getItem('_st') || ''; } catch(e) {}
+  if (!_NS) {
+    _NS = 'b' + Math.random().toString(36).slice(2, 8);
+    try { sessionStorage.setItem('_st', _NS); } catch(e) {}
+  }
 
   // Internal window properties use namespace-prefixed keys to avoid detection
   var WP_OF = _NS + 'of';  // original fetch

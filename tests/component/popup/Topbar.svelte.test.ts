@@ -15,7 +15,7 @@ describe('Topbar', () => {
     render(Topbar, {
       props: { mode: 'development', onmodechange: () => {} },
     });
-    expect(screen.getByText('Coding Plan 秒杀助手')).toBeInTheDocument();
+    expect(screen.getByText('抢购助手')).toBeInTheDocument();
   });
 
   it('renders DEV and PROD toggle buttons', () => {

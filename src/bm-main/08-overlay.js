@@ -1,3 +1,13 @@
+var AUTO_TOGGLE_STORAGE_KEY = _NS + 'auto-ticket-enabled';
+
+function readAutoTicketEnabled() {
+  try { return sessionStorage.getItem(AUTO_TOGGLE_STORAGE_KEY) === '1'; } catch (e) { return false; }
+}
+
+function writeAutoTicketEnabled(enabled) {
+  try { sessionStorage.setItem(AUTO_TOGGLE_STORAGE_KEY, enabled ? '1' : '0'); } catch (e) {}
+}
+
 // ── Overlay HTML ──
 function buildHTML() {
   return '<style>' + CSS + '</style>' +
@@ -32,8 +42,12 @@ function buildHTML() {
     '<div class="pm" id="_pm"></div>' +
     '<div class="ps" id="_ps">暂无有效票 · 建议先录入验证码</div>' +
     '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0">' +
-      '<input type="checkbox" id="_ocrToggle" style="width:10px;height:10px;cursor:pointer">' +
+      '<input type="checkbox" id="_ocrToggle" checked style="width:10px;height:10px;cursor:pointer">' +
       '<label for="_ocrToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">🤖 OCR自动</label>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0">' +
+      '<input type="checkbox" id="_autoToggle" style="width:10px;height:10px;cursor:pointer">' +
+      '<label for="_autoToggle" style="font-size:7px;color:#94a3b8;cursor:pointer">⏱ 自动化录票/刷新</label>' +
     '</div>' +
     '<div id="_ocrStatus" style="font-size:7px;color:#94a3b8;text-align:center;padding:2px 0;display:none"></div><button class="ab" id="_ab">+ Solve Captcha</button>' +
     '</div>' +
@@ -138,10 +152,16 @@ function injectOverlay() {
   overlay.innerHTML = buildHTML();
   (document.body || document.documentElement).appendChild(overlay);
 
+  var autoToggle = document.getElementById('_autoToggle');
+  if (autoToggle) autoToggle.checked = readAutoTicketEnabled();
+
   var meter = document.getElementById('_meter');
   if (meter) { var mh = ''; for (var i=0;i<10;i++) mh += '<div class="fp" id="_fp'+i+'"></div>'; meter.innerHTML = mh; }
 
   bindFireControlEvents();
+
+  var ocrPreferenceRevision = 0;
+  var startupOcrPreferenceRevision = ocrPreferenceRevision;
 
   function poll() { cmdToOverlay('GET_TICKET_COUNT'); }
   setInterval(poll, 1000);
@@ -173,10 +193,24 @@ function injectOverlay() {
       renderCaptchaMeter();
     }
 
+    if (d.type === 'OCR_AUTO_PREF') {
+      var incomingOcrRevision = typeof d.revision === 'number' ? d.revision : 0;
+      if (incomingOcrRevision >= ocrPreferenceRevision) {
+        ocrPreferenceRevision = incomingOcrRevision;
+        var ocrToggle = document.getElementById('_ocrToggle');
+        if (ocrToggle) ocrToggle.checked = d.enabled !== false;
+      }
+    }
+
     if (d.type === 'OCR_STATUS') {
       var el = document.getElementById('_ocrStatus');
       if (el) {
         el.style.display = 'block';
+        if (typeof d.available === 'boolean') {
+          el.style.color = d.available ? '#059669' : '#dc2626';
+          el.textContent = d.available ? '🤖 OCR 状态正常' : '⚠️ OCR 服务未启动';
+          return;
+        }
         var step = d.step || '';
         if (step.indexOf('solved') !== -1) {
           el.style.color = '#059669'; el.textContent = '🤖 OCR 已识别';
@@ -238,6 +272,14 @@ function injectOverlay() {
   });
 
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
+  document.getElementById('_autoToggle').addEventListener('change', function() {
+    writeAutoTicketEnabled(this.checked);
+    if (typeof scheduleAutoTicketWindow === 'function' && _rt.nextSaleTime) scheduleAutoTicketWindow(_rt.nextSaleTime);
+  });
+  document.getElementById('_ocrToggle').addEventListener('change', function() {
+    ocrPreferenceRevision += 1;
+    cmdToOverlay('SET_OCR_AUTO_PREF', { enabled: this.checked, revision: ocrPreferenceRevision });
+  });
   document.getElementById('_fb').addEventListener('click', function() {
     window.postMessage({ [MSG_CMD]: true, type: 'PREFIRE_FIRE', data: { startMs: Date.now(), reason: 'manual' } }, '*');
   });
@@ -334,6 +376,8 @@ function injectOverlay() {
   setTimeout(function() { cmdToOverlay('GET_SALE_TIME'); }, 800);
   setTimeout(function() { cmdToOverlay('GET_FIRE_CONFIG'); }, 1000);
   setTimeout(function() { cmdToOverlay('GET_RUNTIME_CALIBRATION'); }, 1200);
+  setTimeout(function() { cmdToOverlay('GET_OCR_AUTO_PREF', { revision: startupOcrPreferenceRevision }); }, 1400);
+  setTimeout(function() { cmdToOverlay('OCR_CHECK'); }, 1400);
 
   setTimeout(setupProductUI, 300);
 }
@@ -345,5 +389,7 @@ window.addEventListener('message', function(ev) {
   if (ev.source !== window) return;
   if (ev.data?.[MSG_CMD]) {
     if (ev.data.type === 'PRODUCE_CAPTCHA') produceCaptcha();
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_START') setBatchMode(true, 'auto-ticket');
+    if (ev.data.type === 'AUTO_TICKET_WINDOW_STOP') setBatchMode(false, 'auto-ticket');
   }
 });

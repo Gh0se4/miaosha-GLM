@@ -1,38 +1,72 @@
 // ── MAIN world fetch bridge ──────────────────────────────────────────────
-// Handles DO_FETCH requests from the ISOLATED world, executes them via
-// the page's fetch (which includes Sentry instrumentation), making requests
-// indistinguishable from normal page traffic.
+// Executes isolated-world requests through the page fetch implementation.
+
+var activeMainWorldFetches = new Map();
+
+function postMainWorldFetchEvent(type, payload) {
+  payload.type = type;
+  payload[MSG_EVT] = true;
+  window.postMessage(payload, '*');
+}
+
+function fetchFailurePayload(common, timing, error) {
+  return Object.assign({}, common, {
+    ok: false,
+    error: error,
+    status: 0,
+    statusText: '',
+    headers: {},
+    body: '',
+    timing: timing,
+  });
+}
 
 window.addEventListener('message', function(ev) {
-  if (ev.source !== window || !ev.data) return;
+  if (ev.source !== window || !ev.data || !ev.data[MSG_CMD]) return;
   var d = ev.data;
-  if (!d[MSG_CMD]) return;
+  var requestId = d.requestId || d.reqId;
+
+  if (d.type === 'DO_FETCH_CANCEL') {
+    var active = activeMainWorldFetches.get(requestId);
+    if (active) {
+      active.cancelled = true;
+      active.controller.abort();
+      activeMainWorldFetches.delete(requestId);
+    }
+    return;
+  }
+
   if (d.type !== 'DO_FETCH') return;
-
-  var reqId = d.reqId;
   var opts = d.opts || {};
-
+  var timing = {
+    bridgeReceivedAt: Date.now(),
+    bridgeReceivedPerfMs: performance.now(),
+  };
+  var common = { requestId: requestId, reqId: requestId, runId: d.runId, shotId: d.shotId };
+  if (typeof requestId !== 'string' || !requestId) {
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload({ requestId: null, reqId: null }, timing, 'invalid requestId'));
+    return;
+  }
+  if (activeMainWorldFetches.has(requestId)) return;
   var url = String(opts.url || '');
   if (url.indexOf('://bigmodel.cn/') === -1 &&
       url.indexOf('://www.bigmodel.cn/') === -1 &&
       url.indexOf('://www.volcengine.com/') === -1) {
-    var blocked = { type: 'DO_FETCH_RESULT', reqId: reqId };
-    blocked[MSG_EVT] = true;
-    blocked.ok = false; blocked.error = 'blocked';
-    window.postMessage(blocked, '*');
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, 'blocked'));
     return;
   }
 
-  // Build browser-like headers to blend with normal page traffic
+  var controller = new AbortController();
+  var entry = { controller: controller, cancelled: false, settled: false };
+  activeMainWorldFetches.set(requestId, entry);
+
   var headers = {};
-  // Copy caller-provided headers (Authorization, Content-Type, etc.)
   if (opts.headers) {
     var keys = Object.keys(opts.headers);
     for (var i = 0; i < keys.length; i++) {
       if (opts.headers[keys[i]] != null) headers[keys[i]] = opts.headers[keys[i]];
     }
   }
-  // Add standard browser headers that the page would normally send
   if (!headers['Accept']) headers['Accept'] = 'application/json, text/plain, */*';
   if (!headers['Accept-Language']) headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8';
   if (!headers['Cache-Control']) headers['Cache-Control'] = 'no-cache';
@@ -41,35 +75,54 @@ window.addEventListener('message', function(ev) {
   headers['sec-ch-ua-mobile'] = '?0';
   headers['sec-ch-ua-platform'] = '"macOS"';
 
-  // Use the page's window.fetch (which includes Sentry instrumentation)
-  // to make the request indistinguishable from normal page traffic.
-  window.fetch(opts.url, {
-    method: opts.method || 'GET',
-    headers: headers,
-    body: opts.body || undefined,
-    credentials: 'include',
-    mode: 'cors',
-    cache: 'no-cache',
-    redirect: 'follow',
-    referrer: location.origin + '/glm-coding',
-    referrerPolicy: 'strict-origin-when-cross-origin',
-  })
-    .then(function(r) {
-      return r.text().then(function(body) {
-        var resp = { type: 'DO_FETCH_RESULT', reqId: reqId };
-        resp[MSG_EVT] = true;
-        resp.status = r.status;
-        resp.statusText = r.statusText;
-        resp.body = body;
-        resp.ok = true;
-        window.postMessage(resp, '*');
+  var fetchPromise;
+  try {
+    timing.fetchCalledAt = Date.now();
+    timing.fetchCalledPerfMs = performance.now();
+    fetchPromise = window.fetch(opts.url, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body || undefined,
+      credentials: 'include',
+      mode: 'cors',
+      cache: 'no-cache',
+      redirect: 'follow',
+      referrer: location.origin + '/glm-coding',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      signal: controller.signal,
+    });
+  } catch (err) {
+    entry.settled = true;
+    activeMainWorldFetches.delete(requestId);
+    postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, (err && err.message) || 'fetch error'));
+    return;
+  }
+  postMainWorldFetchEvent('DO_FETCH_STARTED', Object.assign({}, common, { timing: timing }));
+
+  Promise.resolve(fetchPromise)
+    .then(function(response) {
+      timing.responseHeadersAt = Date.now();
+      var responseHeaders = {};
+      response.headers.forEach(function(value, key) { responseHeaders[key] = value; });
+      return response.text().then(function(body) {
+        timing.bodyCompletedAt = Date.now();
+        if (entry.cancelled || entry.settled) return;
+        entry.settled = true;
+        activeMainWorldFetches.delete(requestId);
+        postMainWorldFetchEvent('DO_FETCH_RESULT', Object.assign({}, common, {
+          ok: true,
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+          body: body,
+          timing: timing,
+        }));
       });
     })
     .catch(function(err) {
-      var resp = { type: 'DO_FETCH_RESULT', reqId: reqId };
-      resp[MSG_EVT] = true;
-      resp.ok = false;
-      resp.error = err.message || 'fetch error';
-      window.postMessage(resp, '*');
+      if (entry.cancelled || entry.settled) return;
+      entry.settled = true;
+      activeMainWorldFetches.delete(requestId);
+      postMainWorldFetchEvent('DO_FETCH_RESULT', fetchFailurePayload(common, timing, (err && err.message) || 'fetch error'));
     });
 });

@@ -12,27 +12,84 @@ var _log_entries = [];
 var _log_sessionId = '';
 var _log_waveCount = 0;
 var _log_shotSeq = 0;
+var _log_v2Store = null;
+var _log_v2PersistenceWarningShown = false;
+var _log_v2PersistenceErrorWritten = false;
+var _log_sessionStartedAt = '';
+var _log_initialVisibilityState = '';
+
+function _logNavigationIsReload() {
+  try {
+    if (typeof performance === 'undefined') return null;
+    if (typeof performance.getEntriesByType === 'function') {
+      var entries = performance.getEntriesByType('navigation');
+      if (entries && entries.length && typeof entries[0].type === 'string') {
+        return entries[0].type === 'reload';
+      }
+    }
+    if (performance.navigation && typeof performance.navigation.type === 'number') {
+      var reloadType = typeof performance.navigation.TYPE_RELOAD === 'number' ? performance.navigation.TYPE_RELOAD : 1;
+      return performance.navigation.type === reloadType;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function _logRandomSessionSuffix() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto) {
+      if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+      if (typeof crypto.getRandomValues === 'function') {
+        var bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        var hex = '';
+        for (var i = 0; i < bytes.length; i++) hex += (bytes[i] + 256).toString(16).slice(1);
+        return hex;
+      }
+    }
+  } catch (e) {}
+  var parts = [];
+  for (var j = 0; j < 4; j++) {
+    parts.push(Math.floor(Math.random() * 0x100000000).toString(36));
+  }
+  return parts.join('-') + '-' + Date.now().toString(36);
+}
+
+function _logCreateSessionId() {
+  var timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return String(_NS) + timestamp + '-' + _logRandomSessionSuffix();
+}
 
 (function initFireLog() {
-  // Load existing log from sessionStorage
+  // sessionStorage may be cloned into a newly opened tab. Restore only a
+  // genuine reload; older harnesses without navigation timing keep the
+  // historical restore behavior.
+  var navigationIsReload = _logNavigationIsReload();
   try {
     var saved = JSON.parse(sessionStorage.getItem(_NS + 'lg') || 'null');
-    if (saved && Array.isArray(saved.entries)) {
+    if (saved && Array.isArray(saved.entries) && navigationIsReload !== false) {
       _log_entries = saved.entries;
       _log_sessionId = saved.sessionId || '';
       _log_shotSeq = saved.shotSeq || 0;
+      _log_waveCount = saved.waveCount || 0;
+      _log_sessionStartedAt = saved.sessionStartAt || '';
+      _log_initialVisibilityState = saved.initialVisibilityState || '';
     }
   } catch(e) {}
 
   // Generate a new session ID if none exists
   if (!_log_sessionId) {
-    _log_sessionId = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    _log_sessionId = _logCreateSessionId();
   }
+  if (!_log_sessionStartedAt) _log_sessionStartedAt = new Date().toISOString();
+  if (!_log_initialVisibilityState) _log_initialVisibilityState = document.visibilityState || '';
 
   function saveLog() {
     try {
       sessionStorage.setItem(_NS + 'lg', JSON.stringify({
         sessionId: _log_sessionId,
+        sessionStartAt: _log_sessionStartedAt,
+        initialVisibilityState: _log_initialVisibilityState,
         updatedAt: new Date().toISOString(),
         entries: _log_entries,
         shotSeq: _log_shotSeq,
@@ -41,7 +98,9 @@ var _log_shotSeq = 0;
     } catch(e) {}
   }
 
-  function downloadLog() {
+  saveLog();
+
+  function legacyDownloadLog() {
     var report = {
       exportedAt: new Date().toISOString(),
       sessionId: _log_sessionId,
@@ -49,7 +108,7 @@ var _log_shotSeq = 0;
       userAgent: navigator.userAgent,
       totalShots: _log_entries.length,
       summary: {
-        success: 0, busy: 0, soldout: 0, error: 0,
+        success: 0, busy: 0, soldout: 0, waf: 0, error: 0,
         neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0
       },
       entries: _log_entries
@@ -73,6 +132,85 @@ var _log_shotSeq = 0;
     }, 100);
   }
 
+  function downloadV2Log() {
+    if (!_log_v2Store) { legacyDownloadLog(); return Promise.resolve(null); }
+    function downloadReport(report) {
+      var blob = new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'qianggou-fire-log-v2-' + _log_sessionId + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+      return report;
+    }
+    return _log_v2Store.exportLog(_log_sessionId).then(downloadReport).catch(function() {
+      // A live V2 store may be memory-only. Preserve the schema rather than
+      // silently falling back to the legacy report just because IDB failed.
+      return downloadReport({ schemaVersion: 2, exportedAt: new Date().toISOString(), extensionVersion: _fireLogV2ManifestVersion(), session: {}, runs: [], events: [], shots: [] });
+    });
+  }
+
+  function writeV2Session() {
+    if (!_log_v2Store) return;
+    _log_v2Store.writeSession({
+      sessionId: _log_sessionId,
+      runtimeManifestVersion: _fireLogV2ManifestVersion(),
+      userAgent: navigator.userAgent,
+      pageUrl: location.href,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      initialVisibilityState: _log_initialVisibilityState,
+      visibilityState: document.visibilityState || '',
+      sessionStartAt: _log_sessionStartedAt,
+      lastUpdatedAt: new Date().toISOString()
+    });
+  }
+
+  function writeV2Event(type, data) {
+    if (!_log_v2Store) return;
+    _log_v2Store.writeEvent({
+      eventId: 'main-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      sessionId: _log_sessionId,
+      runId: data && data.runId,
+      timestamp: new Date().toISOString(),
+      monotonicMs: typeof performance !== 'undefined' && performance.now ? performance.now() : 0,
+      type: type,
+      details: data || {}
+    });
+    writeV2Session();
+  }
+
+  try {
+    if (typeof createFireLogStore === 'function') {
+      _log_v2Store = createFireLogStore({
+        onPersistenceError: function(error) {
+          if (_log_v2PersistenceErrorWritten) return;
+          _log_v2PersistenceErrorWritten = true;
+          writeV2Event('persistence_error', {
+            message: error && error.message ? error.message : String(error || 'IndexedDB persistence failed')
+          });
+          if (!_log_v2PersistenceWarningShown) {
+            _log_v2PersistenceWarningShown = true;
+            _log_addLine('⚠ 日志仅临时保存在内存，刷新页面会丢失', '#d97706');
+          }
+        }
+      });
+      writeV2Session();
+      window.__fireLogV2Store = _log_v2Store;
+    }
+  } catch (e) { _log_v2Store = null; }
+
+  if (document && document.addEventListener && !window.__fireLogV2VisibilityHandler) {
+    window.__fireLogV2VisibilityHandler = function() {
+      writeV2Event('visibility_changed', { visibilityState: document.visibilityState || '' });
+    };
+    document.addEventListener('visibilitychange', window.__fireLogV2VisibilityHandler);
+  }
+
   function clearLog() {
     _log_entries = [];
     _log_shotSeq = 0;
@@ -93,10 +231,76 @@ var _log_shotSeq = 0;
     postToOverlay('FIRE_RESULT', { line: text });
   }
 
+  function _logFiniteMs(value) {
+    return typeof value === 'number' && isFinite(value) ? value : null;
+  }
+
+  function _logDurationMs(end, start) {
+    var endMs = _logFiniteMs(end);
+    var startMs = _logFiniteMs(start);
+    return endMs !== null && startMs !== null && endMs >= startMs ? endMs - startMs : undefined;
+  }
+
+  // Keep derived fields beside their source timestamps so exports remain
+  // useful even when a compatibility sender did not calculate them.
+  function _logAddShotMetrics(shot) {
+    var timing = shot && shot.timing || {};
+    var plannedAt = _logFiniteMs(shot && shot.plannedAt);
+    var fetchCalledAt = _logFiniteMs(timing.fetchCalledAt);
+    var releasedAt = _logFiniteMs(shot && shot.releasedAt);
+    var actualStartAt = fetchCalledAt !== null ? fetchCalledAt : releasedAt;
+
+    if (plannedAt !== null && actualStartAt !== null && shot.scheduleErrorMs === undefined) {
+      shot.scheduleErrorMs = actualStartAt - plannedAt;
+    }
+    // The runner is the only layer that knows the prior actual fetch start.
+    // Do not infer queueDelayMs from a compatibility payload without that
+    // anchor; an omitted metric is preferable to a misleading one.
+
+    var bridgeWaitMs = _logDurationMs(timing.fetchCalledAt, timing.bridgeReceivedAt);
+    var fetchToHeadersMs = _logDurationMs(timing.responseHeadersAt, timing.fetchCalledAt);
+    var responseBodyMs = _logDurationMs(timing.bodyCompletedAt, timing.responseHeadersAt);
+    var transportTotalMs = _logDurationMs(timing.bodyCompletedAt, timing.bridgeReceivedAt);
+    if (bridgeWaitMs !== undefined && shot.bridgeWaitMs === undefined) shot.bridgeWaitMs = bridgeWaitMs;
+    if (fetchToHeadersMs !== undefined && shot.fetchToHeadersMs === undefined) shot.fetchToHeadersMs = fetchToHeadersMs;
+    if (responseBodyMs !== undefined && shot.responseBodyMs === undefined) shot.responseBodyMs = responseBodyMs;
+    if (transportTotalMs !== undefined && shot.transportTotalMs === undefined) shot.transportTotalMs = transportTotalMs;
+    return shot;
+  }
+
   // Listen for fire events
   window.addEventListener('message', function(e) {
     if (!e.data || !e.data[MSG_OVL]) return;
     var d = e.data;
+
+    if (d.type === 'FIRE_LOG_V2_RUN' && d.data) {
+      if (_log_v2Store) _log_v2Store.writeRun(Object.assign({ sessionId: _log_sessionId }, d.data));
+      return;
+    }
+
+    if (d.type === 'FIRE_LOG_V2_EVENT' && d.data) {
+      var eventData = d.data;
+      writeV2Event(eventData.type || 'fire_event', eventData);
+      if (_log_v2Store && eventData.type === 'tickets_returned' && Array.isArray(eventData.shots)) {
+        for (var returnedIndex = 0; returnedIndex < eventData.shots.length; returnedIndex++) {
+          var returned = eventData.shots[returnedIndex] || {};
+          _log_v2Store.writeShot({
+            shotId: returned.shotId,
+            sessionId: _log_sessionId,
+            runId: eventData.runId,
+            requestSeq: returned.requestSeq,
+            plannedAt: returned.plannedAt,
+            terminalUnsentReason: returned.terminalUnsentReason,
+          });
+        }
+      }
+      if (_log_v2Store && eventData.shot && eventData.shot.shotId) {
+        _log_v2Store.writeShot(Object.assign({ sessionId: _log_sessionId, runId: eventData.runId }, eventData.shot));
+      }
+      return;
+    }
+
+    writeV2Event(d.type, d.data || { line: d.line || '' });
 
     if (d.type === 'FIRE_BATCH_START' && d.data) {
       _log_waveCount++;
@@ -108,10 +312,18 @@ var _log_shotSeq = 0;
         startMs: d.data.startMs || Date.now()
       };
       _log_addLine('  CONFIG ' + JSON.stringify(cfg), '#94a3b8');
+      if (_log_v2Store) _log_v2Store.writeRun({
+        runId: d.data.runId || ('wave-' + _log_waveCount + '-' + Date.now()),
+        sessionId: _log_sessionId,
+        mode: cfg.mode,
+        startMs: cfg.startMs,
+        intervalMs: cfg.burstIntervalMs,
+        totalShots: cfg.totalShots
+      });
     }
 
     if (d.type === 'FIRE_SHOT_RESULT' && d.data) {
-      var shot = d.data;
+      var shot = _logAddShotMetrics(d.data);
       _log_shotSeq++;
       var entry = {
         seq: _log_shotSeq,
@@ -127,7 +339,7 @@ var _log_shotSeq = 0;
         serverMsg: shot.serverMsg || '',
         rawServerMsg: shot.rawServerMsg || '',
         rawBody: shot.rawBody || shot.rawServerMsg || shot.serverMsg || '',
-        httpStatus: shot.httpCode || 0,
+        httpStatus: shot.httpStatus != null ? shot.httpStatus : (shot.httpCode != null ? shot.httpCode : (shot.code || 0)),
         rttMs: shot.rtt || 0,
         responsibility: shot.responsibility || null,
         bizId: shot.bizId || null,
@@ -135,11 +347,50 @@ var _log_shotSeq = 0;
       };
       _log_entries.push(entry);
       saveLog();
+      if (_log_v2Store) {
+        var v2Shot = {
+        shotId: shot.shotId || ('legacy-' + _log_waveCount + '-' + _log_shotSeq),
+        sessionId: _log_sessionId,
+        runId: shot.runId,
+        localSequence: _log_shotSeq,
+        productId: shot.productId,
+        priority: shot.priority,
+        requestSeq: shot.requestSeq,
+        plannedAt: shot.plannedAt,
+        releasedAt: shot.releasedAt,
+        mode: shot.mode,
+        ticket: shot.ticket,
+        randstr: shot.randstr,
+        request: shot.request,
+        response: shot.response || {
+          headers: shot.responseHeaders || {},
+          body: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
+          status: shot.httpStatus,
+          statusText: shot.statusText,
+        },
+        outcome: entry.outcome,
+        httpStatus: entry.httpStatus,
+        statusText: shot.statusText || (shot.response && shot.response.statusText) || '',
+        rttMs: entry.rttMs,
+        timing: shot.timing,
+        scheduleErrorMs: shot.scheduleErrorMs,
+        bridgeWaitMs: shot.bridgeWaitMs,
+        fetchToHeadersMs: shot.fetchToHeadersMs,
+        responseBodyMs: shot.responseBodyMs,
+        transportTotalMs: shot.transportTotalMs,
+        responseBody: shot.responseBody === undefined ? entry.rawBody : shot.responseBody,
+        rawServerMessage: entry.rawServerMsg
+        };
+        // Burst shots intentionally have no serialized queue-delay metric:
+        // they are allowed to overlap, so there is no serial queue anchor.
+        if (shot.queueDelayMs !== undefined) v2Shot.queueDelayMs = shot.queueDelayMs;
+        _log_v2Store.writeShot(v2Shot);
+      }
 
       // Build log line
       var tag = '>[#' + entry.shotIdx + '/' + (entry.wave) + '][P' + entry.priority + ']';
       var outcomeColor = {
-        success: '#059669', soldout: '#64748b', busy: '#d97706',
+        success: '#059669', soldout: '#64748b', busy: '#d97706', waf: '#be123c',
         error: '#dc2626', neterr: '#dc2626',
         captchaService: '#7c3aed', captchaInvalid: '#ea580c', captchaRisk: '#be123c'
       }[entry.outcome] || '#475569';
@@ -179,11 +430,11 @@ var _log_shotSeq = 0;
   });
 
   // Expose download/clear globally for the Fire Matrix buttons
-  window.__fireLogDownload = downloadLog;
+  window.__fireLogDownload = downloadV2Log;
   window.__fireLogClear = clearLog;
   window.__fireLogEntries = function() { return _log_entries; };
   window.__fireLogSummary = function() {
-    var s = { success: 0, busy: 0, soldout: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
+    var s = { success: 0, busy: 0, soldout: 0, waf: 0, error: 0, neterr: 0, captchaService: 0, captchaInvalid: 0, captchaRisk: 0 };
     for (var i = 0; i < _log_entries.length; i++) {
       var o = _log_entries[i].outcome;
       if (s[o] !== undefined) s[o]++;

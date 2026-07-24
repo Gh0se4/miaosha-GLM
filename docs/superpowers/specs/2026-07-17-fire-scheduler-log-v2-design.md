@@ -229,6 +229,18 @@ Each shot contains:
 - RTT, schedule error, queue delay, and transport durations;
 - cancellation or abort metadata.
 
+`scheduleErrorMs` is `actualStartAt - plannedAt`, where `actualStartAt` is
+`fetchCalledAt` (or `releasedAt` only when no fetch was called).
+For Auto and Manual shots that reached `window.fetch()`, `queueDelayMs` is
+`max(0, fetchCalledAt - max(plannedAt, previousFetchCalledAt + intervalMs))`.
+Burst omits this field because it intentionally permits overlap. Transport
+durations are emitted only from ordered real timestamps:
+`bridgeWaitMs` (`fetchCalledAt - bridgeReceivedAt`),
+`fetchToHeadersMs` (`responseHeadersAt - fetchCalledAt`),
+`responseBodyMs` (`bodyCompletedAt - responseHeadersAt`), and
+`transportTotalMs` (`bodyCompletedAt - bridgeReceivedAt`). Unsent cancelled
+shots omit delay and transport metrics rather than fabricating them.
+
 ### Credential boundary
 
 Header filtering is case-insensitive. Log V2 must remove these headers before persistence and export:

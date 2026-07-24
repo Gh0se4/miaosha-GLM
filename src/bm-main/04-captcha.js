@@ -143,9 +143,22 @@ function destroyActiveCaptcha() {
   _activeCaptcha = null;
 }
 
-function setBatchMode(on) {
-  _batchMode = on;
-  if (on) _batchCount = 0;
+function setBatchMode(on, owner) {
+  var requestedOwner = owner || 'manual';
+  if (on) {
+    if (_batchMode) return false;
+    _batchMode = true;
+    _batchModeOwner = requestedOwner;
+    _batchCount = 0;
+  } else {
+    if (!_batchMode) {
+      _batchModeOwner = null;
+      return false;
+    }
+    if (requestedOwner === 'auto-ticket' && _batchModeOwner !== 'auto-ticket') return false;
+    _batchMode = false;
+    _batchModeOwner = null;
+  }
   var btn = document.getElementById('_ab');
   if (btn) {
     if (on) {
@@ -158,9 +171,10 @@ function setBatchMode(on) {
   }
   postMsg('BATCH_MODE_STATUS', { active: on });
   if (on) { produceCaptcha(); } else { destroyActiveCaptcha(); }
+  return true;
 }
 
-function toggleBatchMode() { setBatchMode(!_batchMode); }
+function toggleBatchMode() { setBatchMode(!_batchMode, 'manual'); }
 
 window.addEventListener('message', function(e) {
   if (!e.data || e.data[MSG_OVL] !== true) return;

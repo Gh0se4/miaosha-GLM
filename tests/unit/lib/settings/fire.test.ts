@@ -7,9 +7,9 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import { FIRE_CONFIG_DEFAULT, fireStore } from '../../../../lib/settings/fire';
 
 describe('FIRE_CONFIG_DEFAULT', () => {
-  it('defaults to Alipay and 2100ms interval', () => {
+  it('defaults to Alipay and 3200ms interval', () => {
     expect(FIRE_CONFIG_DEFAULT.payType).toBe('ALI');
-    expect(FIRE_CONFIG_DEFAULT.burstIntervalMs).toBe(2100);
+    expect(FIRE_CONFIG_DEFAULT.burstIntervalMs).toBe(3200);
   });
 });
 
@@ -34,7 +34,7 @@ describe('fireStore', () => {
 
     const cfg = await fireStore.get();
     expect(cfg.payType).toBe('ALI');
-    expect(cfg.burstIntervalMs).toBe(400);
+    expect(cfg.burstIntervalMs).toBe(3200);
   });
 
   it('falls back to default interval when stored value is invalid', async () => {
@@ -43,6 +43,6 @@ describe('fireStore', () => {
     });
 
     const cfg = await fireStore.get();
-    expect(cfg.burstIntervalMs).toBe(2100);
+    expect(cfg.burstIntervalMs).toBe(3200);
   });
 });
