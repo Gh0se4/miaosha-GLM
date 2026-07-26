@@ -705,4 +705,27 @@ function _h1_injectHeader() {
   }, 800);
 }
 
-setTimeout(_h1_injectHeader, 1500);
+// Retry injection until the site header (.pc-header-nav-left) mounts — a single
+// delayed attempt misses slow SPA loads. Retry only while on the target page
+// and not yet injected; the route watcher below covers later navigations.
+var _h1_injectTries = 0;
+function _h1_scheduleInject() {
+  _h1_injectHeader();
+  if (document.getElementById(H1)) return;          // injected → done
+  if (location.pathname !== '/glm-coding') return;  // off-page → wait for route change
+  if (_h1_injectTries++ > 30) return;               // header selector never appeared
+  setTimeout(_h1_scheduleInject, 1000);
+}
+setTimeout(_h1_scheduleInject, 1500);
+
+// The site is client-side routed; re-attempt injection when the path changes so
+// landing on /glm-coding after initial load still shows the L1 header.
+(function () {
+  var _h1_lastPath = location.pathname;
+  setInterval(function () {
+    if (location.pathname === _h1_lastPath) return;
+    _h1_lastPath = location.pathname;
+    _h1_injectTries = 0;
+    _h1_scheduleInject();
+  }, 1000);
+})();
