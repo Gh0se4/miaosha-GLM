@@ -4,6 +4,8 @@
 **构建工具**: WXT 0.20.26 · Vite · TypeScript · Svelte 5  
 **扩展类型**: Chrome MV3 (Manifest V3)
 
+> **范围说明**：本文档主要描述 bigmodel.cn（智谱 GLM）这条核心链路的原理与设计决策。项目此后已扩展为**多平台**架构——通过 `lib/platform/` 下的适配层（`registry.ts` + 各平台 `adapters/`）额外支持火山引擎（volcengine.com）的 Agent Plan / Coding Plan 抢购。各平台的 MAIN world 注入脚本源码位于 `src/<platform>-main/`，由 `scripts/build-overlay.js` 编译为 `public/<platform>-main.js`。下文中以 bigmodel 为例讲解的同源请求代理、Ticket 池、Auth 捕获等机制，在其它平台的适配器中以同构方式实现。
+
 ---
 
 ## 1. 产品目标
