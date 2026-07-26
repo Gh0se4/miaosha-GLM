@@ -25,7 +25,6 @@
 
 (function () {
   var _pt_payComponent = null;
-  var _pt_discoveryAttempted = false;
   var _pt_testMode = false;
   var _pt_manualClose = false;
   var _pt_origClose = null;
@@ -35,9 +34,11 @@
   var _pt_origCaptchaHandlers = {};
 
   function findPayComponent() {
+    // Cache only successful discovery. Do NOT cache a negative result: earlier
+    // calls can run before the site's Vue tree (or PayComponent) has mounted,
+    // and permanently caching null there would break opening the pay dialog
+    // after a win. The BFS below is cheap and only runs while uncached.
     if (_pt_payComponent) return _pt_payComponent;
-    if (_pt_discoveryAttempted) return null;
-    _pt_discoveryAttempted = true;
 
     var root = document.querySelector('#app');
     if (!root || !root.__vue__) return null;

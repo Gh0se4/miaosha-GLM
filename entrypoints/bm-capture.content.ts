@@ -912,7 +912,11 @@ export default defineContentScript({
           const data = res.data;
           const payload = data?.data;
           const status = typeof payload === 'string' ? payload : payload?.status;
-          if (status === 'SUCCESS' || status === 'success' || status === true || data?.code === 200) {
+          // The envelope `code` is transport/validity only (200 accompanies both
+          // success and sold-out elsewhere); the payment outcome lives in
+          // `data.status` (SUCCESS/PENDING/EXPIRE). Branch on status alone so a
+          // still-PENDING poll is not misreported as a confirmed payment.
+          if (status === 'SUCCESS' || status === 'success' || status === true) {
             onUpdate('SUCCESS');
             return;
           }
