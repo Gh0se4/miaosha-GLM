@@ -149,7 +149,10 @@ export default defineContentScript({
         try {
           log('catalog received', { groups: Object.keys(data.catalog.groups || {}) });
           seedVolcengineAgentplanCatalog(data.catalog);
-          await productCatalogStore.set({ 'volcengine-agentplan': data.catalog });
+          // Merge into the multi-platform record so a sibling platform's
+          // catalog (e.g. volcengine-codingplan) is not clobbered.
+          const prev = productCatalogStore.get() ?? {};
+          await productCatalogStore.set({ ...prev, 'volcengine-agentplan': data.catalog });
           log('catalog seeded');
         } catch (e: any) {
           log('catalog store error', e?.message || String(e));

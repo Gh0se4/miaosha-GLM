@@ -330,4 +330,19 @@ describe('scheduleBadgeAlerts', () => {
     const text = await fakeBrowser.action.getBadgeText({});
     expect(text).toBe('');
   });
+
+  it('preserves an active purchase-success OK badge instead of clearing it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await saleTimeStore.set(DEFAULT_CONFIG);
+    const saleTime = getNextSaleTime(DEFAULT_CONFIG, Date.now());
+    // Simulate a completed purchase: green OK badge + its 30-minute clear alarm.
+    await fakeBrowser.action.setBadgeText({ text: 'OK' });
+    await fakeBrowser.alarms.create('badge-ok-clear', { when: Date.now() + 30 * 60_000 });
+    // T-59: outside any countdown window, which would normally blank the badge.
+    vi.setSystemTime(saleTime - 59 * 60_000);
+
+    await scheduleBadgeAlerts();
+
+    expect(await fakeBrowser.action.getBadgeText({})).toBe('OK');
+  });
 });

@@ -126,13 +126,28 @@ export async function calibrate(
   const latencies = keep.map(p => p.rttMs);
   const rttCompensationMs = Math.round(median(latencies));
 
-  // Clock offset: serverTime - localTime, estimated at mid-RTT
+  // Clock offset = serverTime - localTime, estimated at the round-trip midpoint.
+  //
+  // Two corrections vs. the naive estimate:
+  //  1. The HTTP `Date` header has whole-second resolution, so serverTimeMs is
+  //     floored and under-reads the true server time by a uniform 0–1000ms
+  //     (~500ms mean). Left uncorrected this biases the offset low, which makes
+  //     the auto-fire scheduler fire late. Add the mean floor error back.
+  //  2. Use the symmetric single-timestamp estimate `serverTime - localMid`.
+  //     localMidMs already sits at the round-trip midpoint, so adding another
+  //     rtt/2 (as an earlier version did) double-counts the network path and
+  //     biases the offset high.
+  //
+  // Residual sub-second uncertainty remains (the true floor fraction varies per
+  // probe); the median across probes plus the scheduler's safety margin absorb
+  // it. NOTE: this changes effective fire timing — re-validate any hand-tuned
+  // scheduler margins against real sale-time measurements.
+  const DATE_HEADER_FLOOR_BIAS_MS = 500;
   const offsets = keep
     .filter(p => p.serverTimeMs > 0)
     .map(p => {
       const localMidMs = (p.localSendMs + p.localRecvMs) / 2;
-      const estimatedServerAtMid = p.serverTimeMs + p.rttMs / 2;
-      return estimatedServerAtMid - localMidMs;
+      return (p.serverTimeMs + DATE_HEADER_FLOOR_BIAS_MS) - localMidMs;
     });
 
   const clockOffsetMs = offsets.length > 0

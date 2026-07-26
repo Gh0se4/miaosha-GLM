@@ -110,4 +110,37 @@ describe('calibrate', () => {
     ]);
     expect(events[1]?.details).toMatchObject({ probeIndex: 0, total: 8, success: false });
   });
+
+  it('centers clock offset with the Date-header floor correction (no rtt/2 double-count)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-31T02:00:00.500Z'));
+    // Server clock == local clock (true offset 0); the Date header floors to the second.
+    xhrRequest.mockResolvedValue({ headers: { date: 'Sat, 31 May 2026 02:00:00 GMT' } });
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(20); // rtt = 20ms
+    const shouldContinue = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+    const calibration = calibrate(auth, undefined, { shouldContinue });
+    await advanceToNextProbe();
+    const result = await calibration;
+
+    // (floored 02:00:00.000 + 500ms floor-bias) - local mid 02:00:00.500 = 0.
+    // If the old `+ rtt/2` term were still present this would be ~10, not 0.
+    expect(result.clockOffsetMs).toBe(0);
+  });
+
+  it('reports a positive offset when the server clock leads the local clock', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-31T02:00:00.500Z'));
+    // Server ~1s ahead: it stamps the next whole second.
+    xhrRequest.mockResolvedValue({ headers: { date: 'Sat, 31 May 2026 02:00:01 GMT' } });
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(20);
+    const shouldContinue = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+    const calibration = calibrate(auth, undefined, { shouldContinue });
+    await advanceToNextProbe();
+    const result = await calibration;
+
+    // (02:00:01.000 + 500) - 02:00:00.500 = 1000.
+    expect(result.clockOffsetMs).toBe(1000);
+  });
 });

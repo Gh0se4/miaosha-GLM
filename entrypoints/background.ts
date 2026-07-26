@@ -26,6 +26,20 @@ const BADGE_STYLES: Record<number, { text: string; color: string; desc: string }
 const OK_BADGE_TTL_MS = 30 * 60_000;
 const BADGE_CALIBRATE_INTERVAL_MIN = 5;
 
+/**
+ * True while a purchase-success "OK" badge owns the badge — i.e. its dedicated
+ * `badge-ok-clear` alarm is still pending. The countdown/calibrate/fire-hide
+ * paths consult this so they don't wipe the success indicator before its
+ * 30-minute lifetime elapses.
+ */
+async function isOkBadgeActive(): Promise<boolean> {
+  try {
+    return !!(await chrome.alarms.get('badge-ok-clear'));
+  } catch {
+    return false;
+  }
+}
+
 async function showFlashNotification(min: number) {
   const message = min >= 60
     ? `距秒杀开始还有 ${Math.floor(min / 60)} 小时${min % 60 ? min % 60 + ' 分钟' : ''}，数据已刷新`
@@ -154,6 +168,9 @@ export async function rescheduleSaleAlarms(reason = 'runtime') {
  * Called on install/startup and after sale-time changes.
  */
 export async function scheduleBadgeAlerts({ preserveBadge = false } = {}) {
+  // Never wipe an active purchase-success "OK" badge on (re)schedule; it owns
+  // the badge until its own badge-ok-clear alarm fires.
+  if (await isOkBadgeActive()) preserveBadge = true;
   if (!preserveBadge) {
     chrome.action.setBadgeText({ text: '' });
     chrome.action.setTitle({ title: '' });
@@ -225,7 +242,7 @@ export default defineBackground(() => {
       chrome.action.setBadgeText({ text: state.text });
       chrome.action.setBadgeBackgroundColor({ color: state.color });
       chrome.action.setTitle({ title: state.title });
-    } else {
+    } else if (!(await isOkBadgeActive())) {
       clearBadgeAlerts();
     }
   }
@@ -233,6 +250,14 @@ export default defineBackground(() => {
   // R1 / R4: chrome.alarms — TOP LEVEL registration (not inside async function!)
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     const { name } = alarm;
+
+    if (name === 'reminder-snooze') {
+      // '稍后提醒' snooze: re-notify with the current remaining phase.
+      const config = await saleTimeStore.get();
+      const min = Math.round((getNextSaleTime(config) - Date.now()) / 60_000);
+      if (min > 0) await showFlashNotification(min);
+      return;
+    }
 
     if (name.startsWith('flash-')) {
       const min = parseInt(name.split('-')[1], 10);
@@ -253,7 +278,7 @@ export default defineBackground(() => {
       }
 
       if (name === 'badge-fire-hide') {
-        clearBadgeAlerts();
+        if (!(await isOkBadgeActive())) clearBadgeAlerts();
         return;
       }
 
@@ -396,6 +421,10 @@ export default defineBackground(() => {
       chrome.action.openPopup().catch(() => {
         chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
       });
+    } else if (btnIdx === 1) {
+      // '稍后提醒': schedule a one-shot re-notification instead of only
+      // dismissing (previously this button just cleared the notification).
+      chrome.alarms.create('reminder-snooze', { when: Date.now() + 60_000 });
     }
     chrome.notifications.clear(notifId);
   });
