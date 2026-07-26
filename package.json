@@ -6,6 +6,7 @@
     "dev": "wxt",
     "build:overlay": "node scripts/build-overlay.js",
     "build": "node scripts/build-overlay.js && wxt build && node scripts/verify-no-minifier-collision.mjs",
+    "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
