@@ -104,7 +104,7 @@ function _logCreateSessionId() {
     var report = {
       exportedAt: new Date().toISOString(),
       sessionId: _log_sessionId,
-      extensionVersion: '1.4.2',
+      extensionVersion: '__PKG_VERSION__',
       userAgent: navigator.userAgent,
       totalShots: _log_entries.length,
       summary: {
