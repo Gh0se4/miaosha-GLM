@@ -29,22 +29,46 @@ from PIL import Image, ImageDraw, ImageFont
 import ddddocr
 
 app = Flask(__name__)
+# Cap request bodies so a giant base64 payload can't exhaust memory.
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
+
+# Only reflect CORS for the extension's own target sites. A wildcard would let
+# any page the user visits use this local solver as an anonymous oracle and
+# remotely reach /click and /solve.
+_ALLOWED_DOMAINS = ('bigmodel.cn', 'volcengine.com')
+
+
+def _cors_origin():
+    from urllib.parse import urlparse
+    origin = request.headers.get('Origin', '')
+    if not origin:
+        return None
+    host = (urlparse(origin).hostname or '').lower()
+    for d in _ALLOWED_DOMAINS:
+        if host == d or host.endswith('.' + d):
+            return origin
+    return None
+
+
+def _apply_cors(response):
+    origin = _cors_origin()
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Vary'] = 'Origin'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    return response
+
 
 @app.before_request
 def handle_cors_preflight():
     if request.method == 'OPTIONS':
-        resp = jsonify({'ok': True})
-        resp.headers['Access-Control-Allow-Origin'] = '*'
-        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        return resp
+        return _apply_cors(jsonify({'ok': True}))
+
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return response
+    return _apply_cors(response)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 log = logging.getLogger('ddddocr-server')
@@ -351,6 +375,15 @@ def solve_click_captcha(img_bytes: bytes, prompt: str) -> list[dict]:
 
     ocr_summary = [f'{d["char"]}({d["confidence"]:.0%})' for d in detected]
     log.info(f'检测到 {len(detected)} 个目标: {ocr_summary}')
+
+    # Bound the assignment search: permutations(range(m), n) is factorial in the
+    # attacker-controlled prompt length and detection count. Legit click
+    # captchas have a few hint chars over a handful of icons, so cap well above
+    # that to keep a crafted image/remark from hanging the solver.
+    if len(prompt) > 6 or len(detected) > 14:
+        raise ValueError(
+            f'input exceeds solver limits (prompt={len(prompt)}<=6, targets={len(detected)}<=14)'
+        )
     log.info(f'提示字符: {list(prompt)}, 最小距离: {min_dist:.0f}px')
 
     # ── 3. 渲染提示字变体 ──
