@@ -2,7 +2,10 @@ import { storage } from '#imports';
 import type { AuthHeaders } from './types';
 import { AUTH_STORAGE_KEY } from './types';
 
-function extractAuthFromPage(): AuthHeaders | null {
+// Exported for unit testing. This body is also serialized by value into the
+// page's MAIN world via chrome.scripting.executeScript, so it must stay
+// self-contained (no imports/closure references).
+export function extractAuthFromPage(): AuthHeaders | null {
   const cookies = document.cookie.split(';').reduce((acc, c) => {
     const [k, ...vParts] = c.trim().split('=');
     acc[k] = vParts.join('=');
