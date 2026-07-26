@@ -1,9 +1,9 @@
-// Dynamic pricing via Volcengine calculatePriceV5 for Agent Plan.
+// Dynamic pricing via Volcengine calculatePriceV5 for the volcengine overlays (shared by Agent & Coding Plan).
 
-const __volc_agentplan_PRICE_RETRY_MAX = 3;
-const __volc_agentplan_PRICE_RETRY_BASE_MS = 300;
+const __volc_PRICE_RETRY_MAX = 3;
+const __volc_PRICE_RETRY_BASE_MS = 300;
 
-function __volc_agentplan_isRetryableNetworkError(err) {
+function __volc_isRetryableNetworkError(err) {
   // AbortError is intentional — don't retry.
   if (err && err.name === 'AbortError') return false;
   // fetch() throws TypeError for transient network failures such as
@@ -12,8 +12,8 @@ function __volc_agentplan_isRetryableNetworkError(err) {
   return err instanceof TypeError || (err && err.name === 'TypeError');
 }
 
-async function __volc_agentplan_fetchPrice(configBody) {
-  const cookies = __volc_agentplan_getCookies();
+async function __volc_fetchPrice(configBody) {
+  const cookies = __volc_getCookies();
   const csrf = cookies['csrfToken'];
   const webId = cookies['monitor_huoshan_web_id'];
   if (!csrf || !webId) return null;
@@ -51,7 +51,7 @@ async function __volc_agentplan_fetchPrice(configBody) {
   });
 
   let lastError = null;
-  for (let attempt = 1; attempt <= __volc_agentplan_PRICE_RETRY_MAX; attempt++) {
+  for (let attempt = 1; attempt <= __volc_PRICE_RETRY_MAX; attempt++) {
     try {
       const res = await fetch('https://www.volcengine.com/api/sales/calculatePriceV5', {
         method: 'POST',
@@ -62,7 +62,7 @@ async function __volc_agentplan_fetchPrice(configBody) {
       const data = await res.json();
       const error = data.ResponseMetadata?.Error;
       if (error) {
-        console.warn('[volc-agentplan-main] calculatePriceV5 error', error);
+        console.warn('[volc-main] calculatePriceV5 error', error);
         return null;
       }
       const result = data.Result || {};
@@ -72,25 +72,25 @@ async function __volc_agentplan_fetchPrice(configBody) {
       };
     } catch (e) {
       lastError = e;
-      if (!__volc_agentplan_isRetryableNetworkError(e) || attempt >= __volc_agentplan_PRICE_RETRY_MAX) {
+      if (!__volc_isRetryableNetworkError(e) || attempt >= __volc_PRICE_RETRY_MAX) {
         break;
       }
-      const delay = __volc_agentplan_PRICE_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-      console.debug('[volc-agentplan-main] calculatePriceV5 transient failure (attempt ' + attempt + '/' + __volc_agentplan_PRICE_RETRY_MAX + '), retry in ' + delay + 'ms', e?.message || e);
+      const delay = __volc_PRICE_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.debug('[volc-main] calculatePriceV5 transient failure (attempt ' + attempt + '/' + __volc_PRICE_RETRY_MAX + '), retry in ' + delay + 'ms', e?.message || e);
       await new Promise(function (resolve) { setTimeout(resolve, delay); });
     }
   }
 
-  console.warn('[volc-agentplan-main] calculatePriceV5 failed after ' + __volc_agentplan_PRICE_RETRY_MAX + ' attempts: ' + (lastError?.message || lastError));
+  console.warn('[volc-main] calculatePriceV5 failed after ' + __volc_PRICE_RETRY_MAX + ' attempts: ' + (lastError?.message || lastError));
   return null;
 }
 
-async function __volc_agentplan_fetchAllPrices(items) {
+async function __volc_fetchAllPrices(items) {
   const prices = {};
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const key = item.configBody.ConfigurationCode + '|' + (item.configBody.Duration || 1);
-    const price = await __volc_agentplan_fetchPrice(item.configBody);
+    const price = await __volc_fetchPrice(item.configBody);
     prices[key] = price || { original: 0, current: 0 };
   }
   return prices;

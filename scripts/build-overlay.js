@@ -5,6 +5,12 @@
  * Each directory becomes public/{dir}.js (e.g. src/bm-main -> public/bm-main.js).
  * Modules inside a directory are concatenated in sorted order and wrapped in
  * an IIFE with a per-directory injection guard.
+ *
+ * A variant may compose in shared modules (see SHARED_INCLUDES): the variant's
+ * own files (e.g. 00-config.js) are concatenated first, then the shared files.
+ * This lets the volcengine Agent/Coding Plan overlays share one implementation
+ * (src/volc-shared) while each keeps only its 00-config.js. Shared dirs do not
+ * end in "-main", so they are never emitted as standalone outputs.
  */
 const fs = require('fs');
 const path = require('path');
@@ -13,22 +19,38 @@ const ROOT_DIR = path.join(__dirname, '..');
 const SRC_ROOT = path.join(ROOT_DIR, 'src');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 
+// Variant dir -> shared source dirs concatenated after the variant's own files.
+const SHARED_INCLUDES = {
+  'volc-agentplan-main': ['volc-shared'],
+  'volc-codingplan-main': ['volc-shared'],
+};
+
+function collectJsFiles(dirName) {
+  const dir = path.join(SRC_ROOT, dirName);
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.js'))
+    .sort()
+    .map(f => ({ label: `${dirName}/${f}`, fullPath: path.join(dir, f) }));
+}
+
 function buildPlatformMain(dirName) {
-  const srcDir = path.join(SRC_ROOT, dirName);
   const outFile = path.join(PUBLIC_DIR, `${dirName}.js`);
 
-  const files = fs.readdirSync(srcDir)
-    .filter(f => f.endsWith('.js'))
-    .sort();
+  // Own files first (so 00-config.js defines config before shared modules use
+  // it), then any shared includes.
+  const entries = [
+    ...collectJsFiles(dirName),
+    ...(SHARED_INCLUDES[dirName] || []).flatMap(collectJsFiles),
+  ];
 
-  if (files.length === 0) {
-    console.error(`No module files found in ${srcDir}`);
+  if (entries.length === 0) {
+    console.error(`No module files found for ${dirName}`);
     return false;
   }
 
-  const modules = files.map(f => {
-    const content = fs.readFileSync(path.join(srcDir, f), 'utf8');
-    return `// ── ${f} ──\n${content}`;
+  const modules = entries.map(({ label, fullPath }) => {
+    const content = fs.readFileSync(fullPath, 'utf8');
+    return `// ── ${label} ──\n${content}`;
   });
 
   const guardVar = `_inj_${dirName.replace(/-/g, '_')}`;
@@ -44,7 +66,7 @@ ${modules.join('\n\n')}
 `;
 
   fs.writeFileSync(outFile, output, 'utf8');
-  console.log(`Built ${outFile} from ${files.length} modules (${(output.length / 1024).toFixed(1)}KB)`);
+  console.log(`Built ${outFile} from ${entries.length} modules (${(output.length / 1024).toFixed(1)}KB)`);
   return true;
 }
 

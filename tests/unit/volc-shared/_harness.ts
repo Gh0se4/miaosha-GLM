@@ -1,25 +1,24 @@
 /**
- * volc-agentplan-main test harness
+ * volc-shared test harness
  *
- * The src/volc-agentplan-main/*.js modules are vanilla JS scripts designed to be
- * concatenated and injected into a page's MAIN world. They declare functions
- * and vars in the global scope — they have no ES module exports.
+ * src/volc-shared/*.js are the vanilla-JS MAIN-world overlay modules shared by
+ * the volcengine Agent Plan and Coding Plan verticals (each variant adds only
+ * its own 00-config.js). They declare functions/vars in the global scope and
+ * have no ES module exports.
  *
- * Strategy: execute each source file via Node's `vm.runInContext`, which
- * runs the script inside an explicitly provided sandbox object. All top-level
- * `var` declarations and `function` declarations are written into the sandbox,
- * making them accessible to tests.
+ * Strategy: execute each file via Node's `vm.runInContext` so its top-level
+ * `var`/`function` declarations land in the provided sandbox for tests.
  */
 
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import vm from 'vm';
 
-const SRC_DIR = resolve(__dirname, '../../../src/volc-agentplan-main');
+const SRC_DIR = resolve(__dirname, '../../../src/volc-shared');
 
-export type VolcAgentplanScope = Record<string, unknown>;
+export type VolcSharedScope = Record<string, unknown>;
 
-function makeSandbox(): VolcAgentplanScope {
+function makeSandbox(): VolcSharedScope {
   const doc = {
     getElementById: (_id: string) => null,
     createElement: (_tag: string) => ({
@@ -61,7 +60,7 @@ function makeSandbox(): VolcAgentplanScope {
   };
 }
 
-export function loadVolcAgentplanModules(moduleNames: string[]): VolcAgentplanScope {
+export function loadVolcSharedModules(moduleNames: string[]): VolcSharedScope {
   const sandbox = vm.createContext(makeSandbox());
 
   for (const name of moduleNames) {
@@ -70,5 +69,5 @@ export function loadVolcAgentplanModules(moduleNames: string[]): VolcAgentplanSc
     vm.runInContext(code, sandbox);
   }
 
-  return sandbox as VolcAgentplanScope;
+  return sandbox as VolcSharedScope;
 }

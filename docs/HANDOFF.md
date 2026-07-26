@@ -8,7 +8,7 @@
 
 ## 1. 一句话结论
 
-从「测试一装即挂、零 CI」到 **`pnpm test` 257 通过 + typecheck 干净 + build 通过 + 首个 CI**，净删约 2100 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug。**所有可安全自主执行的项均已完成**；剩余项要么需产品/发布决策，要么是对无集成测试的真金白银 overlay 代码做重构，均按理由留待人工接手（见 §4）。
+从「测试一装即挂、零 CI」到 **`pnpm test` 257 通过 + typecheck 干净 + build 通过 + 首个 CI**，净删约 2600 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug；volc 的 TS 适配层与 MAIN-world overlay 均已去重（§4.1）。剩余项均为**产品/发布决策**（发布对齐、命名统一）或**独立专项**（ESLint），见 §4。
 
 ---
 
@@ -21,8 +21,8 @@
 | 正确性 | 提醒横幅模板插值 bug；时钟校准偏晚（Date 秒级量化 + `+rtt/2` 重复补偿）；OK 成功角标提前消失；通知“稍后提醒”空操作；volc catalog 互相覆盖；BURST 标签 200/500ms；Fire Matrix 日志空白；L1 顶栏单次注入 |
 | 安全 | OCR 服务 CORS `*` → 平台白名单；`MAX_CONTENT_LENGTH`；对 permutations 输入设上限防阶乘级 DoS |
 | 清理 | 删死代码（`fire-plan.ts`、registry `forHost/matchHost`、5 个孤立 store 工厂、`OCR_SOLVE` 处理器）；统一忽略 `public/*-main.js` 并取消跟踪 volc 生成产物；一批陈旧文档修正 |
-| 去重 | volc **TS 适配层**抽成 `volcengine-shared` 工厂（order-pipeline / product-probe / adapter），各变体收敛为「配置 + 工厂调用」，保留全部具名导出 |
-| 测试 | 为支付关键代码补 20 个单测：volc 两条下单流水线、bundle-parser、auth 捕获 |
+| 去重 | volc **TS 适配层**抽成 `volcengine-shared` 工厂（order-pipeline / product-probe / adapter）；volc **MAIN-world overlay** 6 个模块抽入 `src/volc-shared/`，变体只留 `00-config.js`（见 §4.1）。两处均保留具名导出/生成产物名，调用方无感 |
+| 测试 | 为支付关键代码补单测：volc 两条下单流水线、bundle-parser、auth 捕获、overlay pricing（volc-shared） |
 
 逐条提交见 `git log dev..HEAD`。逐条发现（file:line / 复现 / 建议 / 判定理由）见分支交付的 `workflow-findings.json`（未入库，随会话交付）。
 
@@ -44,9 +44,13 @@ pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 
 ## 4. 剩余工作（未做，附原因与接手指引）
 
-### 4.1 【高价值 · 唯一未做的“高”项】volc overlay JS 去重
+### 4.1 【已完成】volc overlay JS 去重
 
-**现状**：`src/volc-agentplan-main/` 与 `src/volc-codingplan-main/` 各 7 个文件、~1070 行，高度重复。当前逐文件差异（token 归一化前）：
+**已落地**（见提交 `refactor(overlay): share volc MAIN-world source`）：6 个近似模块（10-shared / 11-fetch-bridge / 20-pricing / 30-catalog / 40-ui / 50-order）移入 `src/volc-shared/`，标识符前缀统一为 `__volc_`，注释/日志通用化；两变体目录只各留 `00-config.js`（唯一真实差异，含 productCode / payPath / globalName / displayNames 等）。`scripts/build-overlay.js` 通过 `SHARED_INCLUDES` 把「变体 00-config + 共享模块」拼成各自的 `public/<variant>-main.js`。
+
+去重前做了等价性证明（归一化前缀后逐文件仅注释不同）+ 去重后校验（生成物含正确产品码且无交叉污染、无残留旧前缀、标识符 IIFE 局部不跨变体冲突、注入 guard 仍区分）。overlay pricing 逻辑测试合并为 `tests/unit/volc-shared/`。净删约 500 行重复。
+
+> 历史背景（去重前现状，保留供参考）：`src/volc-agentplan-main/` 与 `src/volc-codingplan-main/` 曾各 7 文件、~1070 行高度重复，逐文件差异（token 归一化前）：
 
 | 文件 | 差异行 / 总行 | 说明 |
 |------|---------------|------|

@@ -1,6 +1,6 @@
-// Mechanical helpers used by the Coding Plan MAIN-world overlay.
+// Mechanical helpers used by the volcengine MAIN-world overlay (shared by Agent & Coding Plan).
 
-function __volc_codingplan_postCmd(type, data) {
+function __volc_postCmd(type, data) {
   const envelope = { __volc_cmd: true, type: type };
   if (data && typeof data === 'object') {
     for (const key in data) {
@@ -12,7 +12,7 @@ function __volc_codingplan_postCmd(type, data) {
   window.postMessage(envelope, '*');
 }
 
-function __volc_codingplan_getCookies() {
+function __volc_getCookies() {
   return document.cookie.split(';').reduce(function (acc, c) {
     const parts = c.trim().split('=');
     acc[parts[0]] = parts.slice(1).join('=');
@@ -20,14 +20,14 @@ function __volc_codingplan_getCookies() {
   }, {});
 }
 
-function __volc_codingplan_extractQuoted(src, key) {
+function __volc_extractQuoted(src, key) {
   // Anchor to word boundary so "templateIndexKey" does not match "IndexKey".
   const re = new RegExp('\\b' + key + ':"([^"]+)"');
   const m = src.match(re);
   return m ? m[1] : undefined;
 }
 
-function __volc_codingplan_findObjectStart(src, pos) {
+function __volc_findObjectStart(src, pos) {
   let depth = 0;
   let inString = false;
   let esc = false;
@@ -53,7 +53,7 @@ function __volc_codingplan_findObjectStart(src, pos) {
   return -1;
 }
 
-function __volc_codingplan_findMatchingBrace(src, start) {
+function __volc_findMatchingBrace(src, start) {
   let depth = 0;
   let inString = false;
   let esc = false;
@@ -75,16 +75,16 @@ function __volc_codingplan_findMatchingBrace(src, start) {
   return -1;
 }
 
-function __volc_codingplan_extractBalancedArray(src, pos) {
+function __volc_extractBalancedArray(src, pos) {
   const bracket = src.indexOf('[', pos);
   if (bracket < 0) return null;
-  const end = __volc_codingplan_findMatchingBrace(src, bracket);
+  const end = __volc_findMatchingBrace(src, bracket);
   if (end < 0) return null;
   return src.slice(bracket, end + 1);
 }
 
-function __volc_codingplan_parseBundle() {
-  const factory = window[__volc_codingplan_config.globalName];
+function __volc_parseBundle() {
+  const factory = window[__volc_config.globalName];
   if (typeof factory !== 'function') return [];
 
   const src = factory.toString();
@@ -93,13 +93,13 @@ function __volc_codingplan_parseBundle() {
   let idx = -1;
 
   while ((idx = src.indexOf('commonBuyOpenApi:', idx + 1)) !== -1) {
-    const start = __volc_codingplan_findObjectStart(src, idx);
+    const start = __volc_findObjectStart(src, idx);
     if (start < 0) continue;
-    const end = __volc_codingplan_findMatchingBrace(src, start);
+    const end = __volc_findMatchingBrace(src, start);
     if (end < 0) continue;
     const objSrc = src.slice(start, end + 1);
-    const indexKey = __volc_codingplan_extractQuoted(objSrc, 'IndexKey');
-    const arraySrc = __volc_codingplan_extractBalancedArray(src, idx);
+    const indexKey = __volc_extractQuoted(objSrc, 'IndexKey');
+    const arraySrc = __volc_extractBalancedArray(src, idx);
     if (!indexKey || !arraySrc) continue;
 
     try {
@@ -107,7 +107,7 @@ function __volc_codingplan_parseBundle() {
       const list = JSON.parse(jsonLike);
       for (let i = 0; i < list.length; i++) {
         const b = list[i];
-        if (b.Product !== __volc_codingplan_config.productCode) continue;
+        if (b.Product !== __volc_config.productCode) continue;
         const key = b.ConfigurationCode + '|' + (b.Duration || 1);
         const existing = seen[key];
         const isBetter = !existing || (
@@ -135,14 +135,14 @@ function __volc_codingplan_parseBundle() {
   return items;
 }
 
-function __volc_codingplan_billingLabel(duration) {
+function __volc_billingLabel(duration) {
   if (duration === 1) return '连续包月';
   if (duration === 3) return '连续包季';
   if (duration === 12) return '连续包年';
   return duration + '个月';
 }
 
-function __volc_codingplan_durationToBillingPeriod(duration, unit) {
+function __volc_durationToBillingPeriod(duration, unit) {
   if (unit === 'monthly') {
     if (duration === 1) return 'monthly';
     if (duration === 3) return 'quarterly';
@@ -153,14 +153,14 @@ function __volc_codingplan_durationToBillingPeriod(duration, unit) {
   return 'monthly';
 }
 
-function __volc_codingplan_playBeeps(count) {
+function __volc_playBeeps(count) {
   if (count <= 0) return;
   for (let i = 0; i < count; i++) {
-    setTimeout(__volc_codingplan_playBeep, i * 350);
+    setTimeout(__volc_playBeep, i * 350);
   }
 }
 
-function __volc_codingplan_playBeep() {
+function __volc_playBeep() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;

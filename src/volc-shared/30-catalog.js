@@ -1,6 +1,6 @@
 // Build the platform-agnostic product catalog from the parsed bundle + dynamic prices.
 
-function __volc_codingplan_buildCatalog(items, prices) {
+function __volc_buildCatalog(items, prices) {
   const groups = { monthly: [], quarterly: [], yearly: [] };
 
   for (let i = 0; i < items.length; i++) {
@@ -8,14 +8,14 @@ function __volc_codingplan_buildCatalog(items, prices) {
     const b = item.configBody;
     const code = b.ConfigurationCode;
     const duration = b.Duration || 1;
-    const billing = __volc_codingplan_durationToBillingPeriod(duration, b.DurationUnit);
+    const billing = __volc_durationToBillingPeriod(duration, b.DurationUnit);
     const priceKey = code + '|' + duration;
     const price = prices[priceKey] || { original: 0, current: 0 };
     const id = code + '|duration:' + duration;
 
     groups[billing].push({
       id,
-      name: __volc_codingplan_config.displayNames[code] || code,
+      name: __volc_config.displayNames[code] || code,
       billingPeriod: billing,
       price: price.current,
       currentAmount: price.current,
@@ -23,7 +23,7 @@ function __volc_codingplan_buildCatalog(items, prices) {
       originalPrice: price.original,
       soldOut: false,
       tag: price.current > 0 && price.current < price.original ? '限时特惠' : '',
-      description: duration + '个月 · ' + __volc_codingplan_billingLabel(duration),
+      description: duration + '个月 · ' + __volc_billingLabel(duration),
       raw: item,
     });
   }
@@ -33,7 +33,7 @@ function __volc_codingplan_buildCatalog(items, prices) {
   }
 
   return {
-    platform: __volc_codingplan_config.platform,
+    platform: __volc_config.platform,
     updatedAt: Date.now(),
     groups,
   };
