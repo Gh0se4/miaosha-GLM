@@ -1,4 +1,4 @@
-// Dynamic pricing via Volcengine calculatePriceV5 for Agent Plan.
+// Dynamic pricing via Volcengine calculatePriceV5 for Coding Plan.
 
 const __volc_codingplan_PRICE_RETRY_MAX = 3;
 const __volc_codingplan_PRICE_RETRY_BASE_MS = 300;

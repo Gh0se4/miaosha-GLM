@@ -123,7 +123,7 @@ App.svelte
 
 ### 3.4 `entrypoints/options/` — 选项页
 
-秒杀时间配置（小时/分钟/时区），写入 `local:saleTimeConfig`。
+Svelte 5 应用，含多个页面（通用 / 使用 / 架构 / 原理 / 洞察 / 更新日志）。其中「通用」页负责秒杀时间配置（小时/分钟/时区），写入 `local:saleTimeConfig`。
 
 ---
 
@@ -305,23 +305,24 @@ document.head.appendChild(script);
 ```
 /
 ├── entrypoints/
-│   ├── background.ts          # Service worker
-│   ├── bm-capture.content.ts  # Content script (ISOLATED)
-│   ├── popup/                 # Popup 页面 (Svelte 5)
-│   └── options/               # 选项页 (Svelte 5)
+│   ├── background.ts               # Service worker（通知 + 角标）
+│   ├── bm-early.content.ts         # document_start 命名空间引导
+│   ├── bm-capture.content.ts       # bigmodel Content script (ISOLATED)
+│   ├── volc-*-capture.content.ts   # 火山引擎 Agent/Coding Plan Content script
+│   ├── popup/                      # Popup 页面 (Svelte 5)
+│   └── options/                    # 选项页 (Svelte 5，6 个页面)
 ├── lib/
-│   ├── api/
-│   │   ├── types.ts           # 共享类型定义
-│   │   ├── catalog.ts         # API 端点目录（7个端点）
-│   │   ├── client.ts          # executeScript 代理请求
-│   │   ├── auth-store.ts      # Auth CRUD + captureFromTab
-│   │   └── fire-plan.ts       # ticket 分配与自动开火计划
-│   └── settings/
-│       └── dev.ts             # DevMode 设置
-├── public/
-│   └── bm-main.js             # MAIN world 注入脚本（静态文件）
-├── output/chrome-mv3/         # 构建产物（不提交 git）
-└── wxt.config.ts              # 扩展配置
+│   ├── api/                        # catalog / client / auth-store / types +
+│   │                               #   fire 调度执行（fire-scheduler, fire-runner,
+│   │                               #   fire-preparation, strike-plan）、
+│   │                               #   runtime-calibration、payment-status-notifier
+│   ├── platform/                   # 多平台适配层（registry + adapters/*）
+│   └── settings/                   # sale-time / captcha / fire / dev 配置
+├── src/*-main/                     # 各平台 MAIN world 注入脚本源码
+├── public/                         # 生成的 <platform>-main.js + DNR 规则（生成物不提交）
+├── ocr-service/                    # 本地点选验证码 OCR 服务（可选）
+├── output/chrome-mv3/              # 构建产物（不提交 git）
+└── wxt.config.ts                   # 扩展配置
 ```
 
 ### 命令

@@ -378,7 +378,7 @@ it('captureFromTab 从 tab 获取 auth 并写入 storage', async () => {
 
 ### 5.6 E2E 回归门（已移除）
 
-原先嵌入 `npm run build` 的 L5/L6 E2E 回归门（`scripts/regression-target-products.js` 与 `scripts/regression-target-products-e2e.js`）已删除。构建流程现在只保留 `build-overlay.js` 与 `wxt build` 两步，回归验证由 Vitest 单元/组件测试覆盖。
+原先嵌入 `npm run build` 的 L5/L6 E2E 回归门（`scripts/regression-target-products.js` 与 `scripts/regression-target-products-e2e.js`）已删除。构建流程现在为三步：`build-overlay.js` → `wxt build` → `verify-no-minifier-collision.mjs`，回归验证由 Vitest 单元/组件测试覆盖。
 
 ---
 
@@ -426,7 +426,7 @@ pnpm test:ui
 # 带覆盖率报告
 pnpm test:coverage
 
-# 完整 build（仅 build-overlay + wxt build，无 E2E 回归门）
+# 完整 build（build-overlay → wxt build → verify-no-minifier-collision，无 E2E 回归门）
 pnpm build
 ```
 

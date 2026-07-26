@@ -1,4 +1,4 @@
-// ── MAIN world fetch bridge (volcengine agentplan) ──────────────────────
+// ── MAIN world fetch bridge (volcengine codingplan) ─────────────────────
 window.addEventListener('message', function(ev) {
   if (ev.source !== window || !ev.data) return;
   var d = ev.data;

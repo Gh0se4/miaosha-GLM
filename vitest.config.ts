@@ -26,8 +26,9 @@ export default defineConfig({
   },
   test: {
     /**
-     * happy-dom is faster than jsdom and sufficient for our needs.
-     * Component tests that require real browser rendering use Playwright (tests/e2e/).
+     * happy-dom is faster than jsdom and sufficient for our needs. The whole
+     * suite (unit, storage, bm-main vanilla-JS harness, Svelte components)
+     * runs under happy-dom; there is no separate Playwright/E2E tier.
      */
     environment: 'happy-dom',
 
@@ -52,8 +53,8 @@ export default defineConfig({
     ],
 
     /**
-     * Exclude Playwright E2E scripts — they run inside npm run build pipeline,
-     * not through vitest.
+     * Exclude non-test directories. The build pipeline (build-overlay →
+     * wxt build → verify-no-minifier-collision) runs separately from vitest.
      */
     exclude: [
       'scripts/**',

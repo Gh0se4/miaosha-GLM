@@ -1,4 +1,4 @@
-// Order creation and message handling for the Agent Plan MAIN-world overlay.
+// Order creation and message handling for the Coding Plan MAIN-world overlay.
 
 async function __volc_codingplan_tryOrder(product, indexKey) {
   const cookies = __volc_codingplan_getCookies();

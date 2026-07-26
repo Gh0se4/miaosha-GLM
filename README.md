@@ -27,7 +27,8 @@
 | 商品优先级 | 最多 3 个目标按 P1/P2/P3 排序，ticket 按优先级（默认 70/20/10）配比 |
 | 动态切换 | 目标 soldout 后自动移除并把剩余 ticket 重新分配到存活商品 |
 | 开火可视化 | Fire Matrix 实时展示 offset/stagger/配比/退避与每次发射状态；新增 /pay/preview 调用链路图与错误责任主体翻译，明确区分智谱/腾讯/插件/网络问题 |
-| API 调试面板 | Popup DEV 模式可直接调用 bigmodel.cn 7 个 API 端点 |
+| 多平台支持 | 除 bigmodel.cn 外，另支持火山引擎（volcengine.com）Agent Plan / Coding Plan 抢购 |
+| API 调试面板 | Popup DEV 模式可直接调用 catalog.ts 中定义的全部 bigmodel.cn API 端点 |
 
 ---
 

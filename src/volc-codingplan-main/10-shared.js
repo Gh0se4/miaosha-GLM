@@ -1,4 +1,4 @@
-// Mechanical helpers used by the Agent Plan MAIN-world overlay.
+// Mechanical helpers used by the Coding Plan MAIN-world overlay.
 
 function __volc_codingplan_postCmd(type, data) {
   const envelope = { __volc_cmd: true, type: type };
