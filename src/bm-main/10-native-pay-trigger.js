@@ -293,7 +293,8 @@
   }
 
   window.addEventListener('message', function (e) {
-    if (!e.data || e.data[MSG_OVL] !== true) return;
+    // Reject cross-window senders (see 04-captcha.js); marker stays primary gate.
+    if ((e.source && e.source !== window) || !e.data || e.data[MSG_OVL] !== true) return;
     var msg = e.data;
     if (msg.type !== 'BURST_FIRE_SUCCESS') return;
     var ps = msg.data;
@@ -303,7 +304,8 @@
 
   // Listen for the explicit test command from the L1 header button.
   window.addEventListener('message', function (e) {
-    if (!e.data || e.data[MSG_CMD] !== true) return;
+    // Reject cross-window senders (see 04-captcha.js); marker stays primary gate.
+    if ((e.source && e.source !== window) || !e.data || e.data[MSG_CMD] !== true) return;
     if (e.data.type !== 'TEST_NATIVE_PAYMENT') return;
     var data = e.data.data || {};
     openNativePaymentDialog({

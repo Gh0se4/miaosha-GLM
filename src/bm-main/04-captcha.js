@@ -177,7 +177,12 @@ function setBatchMode(on, owner) {
 function toggleBatchMode() { setBatchMode(!_batchMode, 'manual'); }
 
 window.addEventListener('message', function(e) {
-  if (!e.data || e.data[MSG_OVL] !== true) return;
+  // Defense-in-depth: reject messages from a different window (cross-origin
+  // iframe / opener). A real cross-window sender always carries e.source, so
+  // guarding on `e.source && e.source !== window` blocks them while still
+  // accepting same-window posts and the synthetic (source-less) events used by
+  // the unit-test harness. The per-session marker below remains the primary gate.
+  if ((e.source && e.source !== window) || !e.data || e.data[MSG_OVL] !== true) return;
   if (e.data.type === 'BURST_FIRE_SUCCESS' && e.data.data && e.data.data.bizId) {
     destroyActiveCaptcha(); if (_batchMode) setBatchMode(false);
   }

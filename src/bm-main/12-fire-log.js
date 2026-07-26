@@ -270,7 +270,8 @@ function _logCreateSessionId() {
 
   // Listen for fire events
   window.addEventListener('message', function(e) {
-    if (!e.data || !e.data[MSG_OVL]) return;
+    // Reject cross-window senders (see 04-captcha.js); marker stays primary gate.
+    if ((e.source && e.source !== window) || !e.data || !e.data[MSG_OVL]) return;
     var d = e.data;
 
     if (d.type === 'FIRE_LOG_V2_RUN' && d.data) {

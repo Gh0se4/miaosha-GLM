@@ -618,7 +618,8 @@ function _fv_bindEvents() {
 }
 
 window.addEventListener('message', function(e) {
-  if (!e.data || !e.data[MSG_OVL]) return;
+  // Reject cross-window senders (see 04-captcha.js); marker stays primary gate.
+  if ((e.source && e.source !== window) || !e.data || !e.data[MSG_OVL]) return;
   var d = e.data;
 
   if (d.type === 'FIRE_RESULT' && d.data && String(d.data.line || '').indexOf(_FV_PERSISTENCE_WARNING) !== -1) {
