@@ -4,6 +4,19 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 export default defineConfig({
   plugins: [WxtVitest(), svelte()],
+  /**
+   * Vite 8 uses Rolldown as its dependency optimizer. When it pre-bundles the
+   * test dependency graph for the browser (happy-dom) environment, Rolldown's
+   * injected runtime helper (`\0rolldown/runtime.js`) imports `node:module`,
+   * which cannot be resolved for a browser target and aborts test startup with
+   * a RESOLVE_ERROR. Keeping Node built-ins external to the optimizer output
+   * lets that helper import resolve normally in the Node test runner. This
+   * replaces the old `test.deps.optimizer.*.enabled: false` toggle, which no
+   * longer suppresses optimization under Vitest 4 + Vite 8.
+   */
+  optimizeDeps: {
+    rollupOptions: { external: [/^node:/] },
+  },
   resolve: {
     /**
      * 'browser' condition is required for Svelte 5 to use the client-side
@@ -50,19 +63,5 @@ export default defineConfig({
     ],
 
     globals: true,
-
-    /**
-     * Disable dependency pre-bundling in test mode. The project depends on
-     * WXT's fakeBrowser and happy-dom, whose transitive imports touch
-     * Node built-ins (e.g. node:module). Vite 6 + rolldown try to pre-bundle
-     * them and fail on 'node:module' resolution. Disabling optimization keeps
-     * tests running without impacting the production build.
-     */
-    deps: {
-      optimizer: {
-        web: { enabled: false },
-        ssr: { enabled: false },
-      },
-    },
   },
 });
