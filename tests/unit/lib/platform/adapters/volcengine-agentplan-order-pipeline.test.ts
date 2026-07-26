@@ -103,6 +103,23 @@ describe('VolcengineAgentplanOrderPipeline', () => {
     expect(result.data?.payUrl).toContain('order-9');
   });
 
+  it('stamps the platform product code in the fallback order body', async () => {
+    let sentProduct: string | undefined;
+    setMainWorldFetcher(async (opts) => {
+      const body = JSON.parse(opts.body as string);
+      sentProduct = body.ConfigList?.[0]?.Product;
+      return volcResponse({ Result: { CustomerOrderID: 'order-fb' } });
+    });
+
+    const result = await new VolcengineAgentplanOrderPipeline().run(
+      { platform: 'volcengine-agentplan', productId: 'Agent_Plan_Large_monthly' } as any,
+      auth as any,
+    );
+
+    expect(result.success).toBe(true);
+    expect(sentProduct).toBe('ark_subscription');
+  });
+
   it('passes a non-retryable error through unchanged', async () => {
     setMainWorldFetcher(async () => volcResponse({ ResponseMetadata: { Error: { Code: 'Throttling', Message: 'slow' } } }));
     const result = await new VolcengineAgentplanOrderPipeline().run(

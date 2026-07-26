@@ -139,6 +139,25 @@ describe('VolcengineCodingplanOrderPipeline', () => {
     expect(result).toMatchObject({ success: false, error: '[Throttling] slow down' });
   });
 
+  it('stamps the platform product code in the fallback order body', async () => {
+    let sentProduct: string | undefined;
+    setMainWorldFetcher(async (opts) => {
+      const body = JSON.parse(opts.body as string);
+      sentProduct = body.ConfigList?.[0]?.Product;
+      return volcResponse({ Result: { CustomerOrderID: 'order-fb' } });
+    });
+
+    // A bare config code (no |duration:) misses the config-item map and hits
+    // the fallback reconstruction, which stamps the platform's Product code.
+    const result = await new VolcengineCodingplanOrderPipeline().run(
+      { platform: 'volcengine-codingplan', productId: 'Coding_Plan_Pro_monthly' } as any,
+      auth as any,
+    );
+
+    expect(result.success).toBe(true);
+    expect(sentProduct).toBe('ark_bd');
+  });
+
   it('errors when CommonBuy returns no CustomerOrderID', async () => {
     setMainWorldFetcher(async () => volcResponse({ Result: {} }));
 
