@@ -8,11 +8,11 @@
 
 ## 1. 一句话结论
 
-从「测试一装即挂、零 CI」到 **`pnpm test` 257 通过 + typecheck 干净 + build 通过 + 首个 CI**，净删约 2600 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug；volc 的 TS 适配层与 MAIN-world overlay 均已去重（§4.1）。剩余项均为**产品/发布决策**（发布对齐、命名统一）或**独立专项**（ESLint），见 §4。
+从「测试一装即挂、零 CI」到 **`pnpm test` 265 通过 + typecheck 干净 + build 通过 + zip 产物 + 首个 CI**，净删约 2969 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug；volc 的 TS 适配层与 MAIN-world overlay 均已去重（§4.1），版本漂移已根治，MAIN-world 消息处理器已加跨窗口守卫。已在**全新 `pnpm install --frozen-lockfile` 环境**下验证 install→typecheck→test→build→zip 全绿（开箱即用）。剩余仅为**产品/品牌/发布决策**（命名统一、下载链接与站内更新日志、ESLint 专项），见 §4.2。
 
 ---
 
-## 2. 已完成（15 个提交，均已签名）
+## 2. 已完成（20+ 个提交，均已签名；详见 `git log dev..HEAD`）
 
 | 类别 | 内容 |
 |------|------|
@@ -33,7 +33,7 @@
 ```bash
 pnpm install
 pnpm typecheck   # wxt prepare && tsc --noEmit
-pnpm test        # vitest，当前 257 passed
+pnpm test        # vitest，当前 265 passed
 pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 ```
 
@@ -42,7 +42,7 @@ pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 
 ---
 
-## 4. 剩余工作（未做，附原因与接手指引）
+## 4. 去重与剩余工作
 
 ### 4.1 【已完成】volc overlay JS 去重
 
@@ -83,16 +83,16 @@ pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 - 补 `tests/unit/volc-codingplan-main/`（pricing + order），照抄 agentplan 的 `_harness.ts` 与 `pricing.test.ts`，把标识符前缀与产品码换成 codingplan（`__volc_codingplan_fetchPrice`、`ark_bd`、`Coding_Plan_*`）。这直接消除「codingplan overlay 零测试」的确认发现，且不动生产代码。
 - 可加一个「结构一致性」测试：读两目录、对差异 token 归一化后断言剩余内容一致，从而**自动捕获未来漂移**——在不做去重的前提下解决该发现的核心风险。
 
-### 4.2 需产品/发布决策的项
-- **README 版本 v1.4.2 vs package.json 1.5.0+ 下载链接**：下载链接指向上游 v1.4.2 release；本 fork 无 1.5.0 release，直接改链接会 404。建议：发 1.5.0 release 后更新，或让 `scripts/zip-prepare.mjs` 从 package 版本派生 zip 文件名以杜绝漂移。（`src/bm-main/12-fire-log.js` 里 legacy 下载还硬编码 `extensionVersion: '1.4.2'`，一并处理。）
-- **命名统一**：目录 `miaosha-GLM` / package `qianggou-GLM` / manifest `抢购助手` / README `智谱秒杀助手`，且混用「秒杀 / 抢购」。建议统一一个规范名与术语。
+### 4.2 需产品/发布决策的项（**仅剩这些需人工**）
+- **命名统一**：目录 `miaosha-GLM` / package `qianggou-GLM` / manifest `抢购助手` / README `智谱秒杀助手`，且混用「秒杀 / 抢购」。属品牌决策，需维护者定一个规范名与术语后统一。
+- **README 下载链接 + 站内更新日志**：README 下载链接指向上游 v1.4.2 release（本 fork 无 1.5.0 release，直接改会 404）；`entrypoints/options/App.svelte` 与 `ReleaseLogPage.svelte` 的更新日志仍是 v1.4.2 文案。发 1.5.0 release 时一并更新，并补写 1.5.0 更新日志（内容需维护者定）。
+- **ESLint/Prettier**：对 ~6.4k 行手写 IIFE 引入 lint/format 会一次性涌现大量既有告警（Prettier 更会产生巨量重排 diff），应作为独立 PR（先定规则、配置 IIFE 全局、再批量修），否则会破坏 `pnpm build`/CI 的「开箱即用」。
 
-### 4.3 独立专项
-- **引入 ESLint/Prettier + lint CI 步**：对 ~6.4k 行手写 IIFE 引入 lint 会一次性涌现大量既有告警，应作为独立 PR（先定规则、再批量修）。
-
-### 4.4 低优先 / 纵深防御
-- **MAIN-world 5 个消息处理器缺 `e.source !== window`**（`04-captcha.js:180`、`09-fire-viz.js:621`、`12-fire-log.js:273`、`10-native-pay-trigger.js:296/306`）：纯纵深防御（命名空间随机 marker 已挡跨源）。**注意**：直接加会破坏以「无 source 派发消息」的测试 harness（`tests/unit/bm-main/fire-log-store.test.ts:690`、`tests/unit/entrypoints/bm-capture-scope.test.ts:56`），需同时让 harness 以 `source: window` 派发。本轮曾尝试后回退。
-- `lib/api/client.ts` 单测（DEV 面板专用，价值低）；`shared/stores` 的 `isReady()` 硬编码 `authorization` 头（对 volc 恒 false，但目前无调用方）。
+### 4.3 本轮已补做（原「剩余」项）
+- ✅ **版本漂移**：`build-overlay.js` 现把 `__PKG_VERSION__` 占位替换为 package 版本（overlay 回退版本不再漂移）；`zip-prepare.mjs` 早已从 package 版本派生 zip 名。
+- ✅ **MAIN-world `e.source` 检查**：5 个处理器已加 `e.source && e.source !== window`（跨窗口拦截，同窗口/测试无 source 派发放行）。
+- ✅ **`client.ts` 单测**（parseResponseBody / buildHeaders / findBigmodelTabId / testEndpoint 错误路径）。
+- ✅ **`isReady()` 平台化**：接受 `authorization`（bigmodel）或 `x-csrf-token`（volcengine）。
 
 ---
 
@@ -109,5 +109,5 @@ pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 
 ## 6. 分支 / 推送状态
 
-- 分支 `claude/project-analysis-improvement-03s6xy` 已推送到 GitHub（15 提交），基于 `dev`。
+- 分支 `claude/project-analysis-improvement-03s6xy` 已推送到 GitHub（20+ 提交，详见 `git log dev..HEAD`），基于 `dev`。已在全新 `pnpm install --frozen-lockfile` 环境验证开箱即用。
 - 未创建 PR。合并前建议按 §3 跑一遍 typecheck/test/build。
