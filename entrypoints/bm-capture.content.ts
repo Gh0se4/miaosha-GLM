@@ -303,18 +303,18 @@ function createOverlay(min: number) {
       font-weight: 800; text-align: center;
       display: flex; align-items: center; justify-content: center; gap: 12px;
       box-shadow: 0 4px 20px rgba(220,38,38,0.4);
-      animation: ' + _ns + 'ap 1s ease-in-out infinite alternate;
+      animation: ${_ns}ap 1s ease-in-out infinite alternate;
       cursor: pointer; font-family: system-ui, -apple-system, sans-serif;
     ">
       <span>${reminderText}</span>
-      <button id=_ns + 'ob' style="
+      <button id="${_ns}ob" style="
         background: #fff; color: #dc2626; border: none;
         padding: 5px 14px; border-radius: 20px; font-weight: 700;
         cursor: pointer; font-size: 13px;
       ">${actionText}</button>
     </div>
     <style>
-      @keyframes ' + _ns + 'ap {
+      @keyframes ${_ns}ap {
         from { opacity: 0.85; transform: scale(1); }
         to { opacity: 1; transform: scale(1.01); }
       }
