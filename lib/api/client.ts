@@ -8,7 +8,7 @@ type BigmodelTab = {
   id?: number;
 };
 
-function buildHeaders(auth: AuthHeaders): Record<string, string> {
+export function buildHeaders(auth: AuthHeaders): Record<string, string> {
   return {
     'Content-Type': 'application/json;charset=UTF-8',
     Authorization: auth.authorization,
@@ -17,7 +17,7 @@ function buildHeaders(auth: AuthHeaders): Record<string, string> {
   };
 }
 
-function parseResponseBody(bodyText: string | null): unknown {
+export function parseResponseBody(bodyText: string | null): unknown {
   if (bodyText === null) return null;
 
   try {
@@ -27,7 +27,7 @@ function parseResponseBody(bodyText: string | null): unknown {
   }
 }
 
-async function findBigmodelTabId(): Promise<number> {
+export async function findBigmodelTabId(): Promise<number> {
   const tabs = await chrome.tabs.query({ url: BIGMODEL_TAB_URL });
   const tab = tabs.find((candidate: BigmodelTab) => candidate.active && candidate.id != null)
     ?? tabs.find((candidate: BigmodelTab) => candidate.id != null);

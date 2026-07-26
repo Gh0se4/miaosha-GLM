@@ -21,14 +21,20 @@ import { ChromeStorageStore } from './storage-base';
 export class MemoryAuthStore extends MemoryStore<PlatformAuth> implements IAuthStore {
   isReady(): boolean {
     const a = this.get();
-    return !!a && !!a.headers.authorization;
+    // Platform-aware: bigmodel auth carries `authorization`; volcengine auth
+    // carries `x-csrf-token` (+ monitor-huoshan-web-id). Accept either so this
+    // does not return false for a valid volcengine session.
+    return !!a && !!a.headers && (!!a.headers.authorization || !!a.headers['x-csrf-token']);
   }
 }
 
 export class ChromeAuthStore extends ChromeStorageStore<PlatformAuth> implements IAuthStore {
   isReady(): boolean {
     const a = this.get();
-    return !!a && !!a.headers.authorization;
+    // Platform-aware: bigmodel auth carries `authorization`; volcengine auth
+    // carries `x-csrf-token` (+ monitor-huoshan-web-id). Accept either so this
+    // does not return false for a valid volcengine session.
+    return !!a && !!a.headers && (!!a.headers.authorization || !!a.headers['x-csrf-token']);
   }
 }
 
