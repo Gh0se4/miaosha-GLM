@@ -28,7 +28,6 @@ export interface IPlatformRegistry {
   register(adapter: IPlatformAdapter): void;
   get(id: PlatformId): IPlatformAdapter | undefined;
   list(): readonly IPlatformAdapter[];
-  forHost(host: string): IPlatformAdapter | undefined;
 }
 
 // =============================================================================

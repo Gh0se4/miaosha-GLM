@@ -2,7 +2,6 @@
 // Injects MAIN world XHR interceptor and relays payment/ticket data to WXT storage
 // Also implements R3: Tab Audio+Visual reminder when user is on bigmodel.cn
 import { storage } from '#imports';
-import type { AutoFirePlanShot } from '../lib/api/fire-plan';
 import { createFirePreparationCancellation, runAfterFirePreparation, type FirePreparationCancellation } from '../lib/api/fire-preparation';
 import { FireRunner } from '../lib/api/fire-runner';
 import { buildFireSchedule } from '../lib/api/fire-scheduler';
@@ -1776,21 +1775,6 @@ export default defineContentScript({
             postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, data: result });
           } catch (e: any) {
             console.error('[OCR-ISO] error:', e.message);
-            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, error: e.message });
-          }
-        }
-        if (event.data.type === 'OCR_SOLVE' && event.data.data?.image) {
-          // Direct OCR proxy (for canvas-based captchas that ARE accessible)
-          const imageB64 = event.data.image;
-          try {
-            const resp = await fetch('http://127.0.0.1:9898/solve', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image: imageB64 })
-            });
-            const result = await resp.json();
-            postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, data: result });
-          } catch (e: any) {
             postToOverlay({ type: 'OCR_RESULT', reqId: event.data.data.reqId, error: e.message });
           }
         }
