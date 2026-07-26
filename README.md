@@ -140,19 +140,26 @@ unzip miaosha-glm-1.4.2-chrome.zip
 
 ```
 ├── entrypoints/
-│   ├── background.ts          # Service Worker：通知 + 角标倒计时
-│   ├── bm-capture.content.ts  # Content Script (ISOLATED)：验证码/认证/Fire 调度
-│   ├── popup/                 # Popup 页面 (Svelte 5)
-│   └── options/               # 选项页 (Svelte 5：通用 / 使用 / 架构 / 洞察 / 更新日志)
+│   ├── background.ts                # Service Worker：通知 + 角标倒计时
+│   ├── bm-early.content.ts          # document_start 注入：运行时命名空间引导
+│   ├── bm-capture.content.ts        # bigmodel Content Script (ISOLATED)：验证码/认证/Fire 调度
+│   ├── volc-agentplan-capture.content.ts   # 火山引擎 Agent Plan Content Script
+│   ├── volc-codingplan-capture.content.ts  # 火山引擎 Coding Plan Content Script
+│   ├── popup/                       # Popup 页面 (Svelte 5)
+│   └── options/                     # 选项页 (Svelte 5：通用 / 使用 / 架构 / 洞察 / 更新日志)
 ├── lib/
-│   ├── api/                   # API 客户端、Auth 存储、Fire 计划（票分配 + 自动开火）
-│   └── settings/              # 秒杀时间、验证码、Fire 策略配置
-├── src/bm-main/               # MAIN world 注入脚本源码（01-10 模块，含 L1 顶栏注入）
-├── public/bm-main.js          # 自动生成的 IIFE（勿手动编辑）
-├── scripts/                   # 构建脚本（overlay 构建 + zip 打包）
-├── tests/                     # 单元/组件/集成测试
-└── docs/                      # 架构文档、API 探查、故障复盘
+│   ├── api/                         # Fire 调度/执行、时钟校准、票分配、支付轮询
+│   ├── platform/                    # 多平台适配层（registry + bigmodel / 火山引擎 adapters）
+│   └── settings/                    # 秒杀时间、验证码、Fire 策略配置
+├── src/*-main/                      # 各平台 MAIN world 注入脚本源码（构建为 IIFE）
+├── public/                          # 自动生成的注入脚本（勿手动编辑）+ declarativeNetRequest 规则
+├── ocr-service/                     # 本地点选验证码 OCR 服务（ddddocr，可选）
+├── scripts/                         # 构建脚本（overlay 构建 + zip 打包 + 产物校验）
+├── tests/                           # 单元/组件/集成测试（5 层）
+└── docs/                            # 架构文档、实现计划与规格
 ```
+
+> **多平台支持**：本扩展最初面向 bigmodel.cn（智谱 GLM Coding Plan），现已通过 `lib/platform` 适配层扩展支持火山引擎（volcengine.com）的 Agent Plan / Coding Plan 抢购。各平台的 MAIN world 注入脚本源码位于 `src/<platform>-main/`，由 `scripts/build-overlay.js` 编译为 `public/<platform>-main.js`。
 
 ---
 
