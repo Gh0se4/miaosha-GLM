@@ -658,7 +658,10 @@ window.addEventListener('message', function(e) {
   }
 
   if (d.type === 'FIRE_RESULT') {
-    var line = d.line || '';
+    // MAIN-world senders nest the text under d.data.line (postToOverlay wraps
+    // payloads as {type,data}); ISOLATED-world senders put it at top-level
+    // d.line. Accept both so MAIN-origin log lines don't render blank.
+    var line = d.line || (d.data && d.data.line) || '';
     var lc = '#475569';
     if (line.indexOf('ORDER') !== -1 || line.indexOf('bizId') !== -1) lc = '#059669';
     else if (line.indexOf('sold-out') !== -1)                          lc = '#64748b';

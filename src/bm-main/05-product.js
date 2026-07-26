@@ -107,7 +107,7 @@ function syncSelectionStatus() {
   }
   if (fbb) {
     fbb.disabled = summary.launchable === 0;
-    fbb.innerHTML = '&#9889; BURST 并发 (' + summary.tickets + ') · 200ms';
+    fbb.innerHTML = '&#9889; BURST 并发 (' + summary.tickets + ') · 500ms';
   }
   if (ammo) {
     if (summary.selected === 0) {
