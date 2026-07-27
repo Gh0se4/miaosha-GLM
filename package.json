@@ -1,7 +1,7 @@
 {
-  "name": "qianggou-GLM",
+  "name": "qianggou-glm",
   "version": "1.5.0",
-  "description": "Coding Plan 抢购助手浏览器扩展",
+  "description": "多平台 Coding Plan 抢购助手浏览器扩展（智谱 bigmodel + 火山引擎）",
   "scripts": {
     "dev": "wxt",
     "build:overlay": "node scripts/build-overlay.js",

@@ -15,6 +15,43 @@
   };
 
   const LOGS: LogItem[] = [
+    // ── v1.5.0 ──
+    {
+      category: 'fix',
+      title: '支付状态不再误报「已确认」',
+      body: '下单后的支付轮询此前把接口信封码 200 当成付款成功，导致用户尚未付款就被提示「支付已确认」。现改为只依据真实支付状态（SUCCESS / PENDING / EXPIRE）判定。',
+    },
+    {
+      category: 'fix',
+      title: '抢到后可正常拉起原生支付弹窗',
+      body: '发现站点 PayComponent 的逻辑此前会在页面尚未就绪时把「未找到」永久缓存，导致抢中后无法弹出支付框。现只缓存成功结果，必要时重试查找。',
+    },
+    {
+      category: 'fix',
+      title: '开火时序校准修正',
+      body: '时钟校准此前因 HTTP Date 头仅到秒级而系统性偏晚约 0.5s，且重复补偿了半个 RTT。现修正偏置并去除重复补偿，使自动开火更贴近开售瞬间（仍建议结合真实抢购数据复核余量）。',
+    },
+    {
+      category: 'fix',
+      title: '若干体验修复',
+      body: '抢购成功「OK」角标不再被提前清除、可保留约 30 分钟；通知「稍后提醒」按钮现在会真正再次提醒；提醒横幅动画/按钮修正；BURST 按钮标签由 200ms 更正为与实际一致的 500ms；Fire Matrix 部分来自页面浮层的日志不再空白。',
+    },
+    {
+      category: 'cleanup',
+      title: '火山引擎覆盖层与适配层去重',
+      body: 'Agent Plan 与 Coding Plan 的 MAIN-world 覆盖层（约 1000 行）合并为共享实现 src/volc-shared/，各活动仅保留 00-config.js；TS 适配层同样抽为共享工厂。行为不变，显著降低两活动逻辑漂移风险。',
+    },
+    {
+      category: 'improvement',
+      title: '安全与工程健壮性',
+      body: '本地 OCR 服务的 CORS 由通配收紧为平台白名单，并对输入设上限防止拒绝服务；MAIN-world 消息处理器加跨窗口来源守卫；overlay 版本号改为构建期注入，避免回退版本漂移。',
+    },
+    {
+      category: 'improvement',
+      title: '测试与 CI 基线',
+      body: '修复了此前一装即崩的测试套件（Vite 8 optimizer 兼容），新增 typecheck 脚本与首个 GitHub Actions CI；为支付关键路径（火山下单流水线、bundle 解析、auth 捕获、client、overlay 定价）补充单测。',
+    },
+    // ── v1.4.2 及更早 ──
     {
       category: 'feature',
       title: '火山引擎覆盖层登录态守卫与一键登录',
@@ -157,7 +194,7 @@
       <h3>v{version} 更新日志</h3>
     </div>
     <p class="section-note">
-      自 <code>v1.0.0.alpha</code> 以来的主要改进。本次发布聚焦「策略精细化」与「体验可观测性」：从实测数据出发优化发射节奏，同时把配置、提醒与决策过程更直观地呈现给用户。
+      <strong>v1.5.0</strong> 聚焦「支付链路修复 + 工程健壮性 + 多平台去重」：修正抢中后的支付状态误报与支付弹窗拉起、开火时序校准，合并火山引擎两活动的重复实现，恢复并扩充测试与 CI。下方同时保留 <code>v1.4.2</code> 及更早的历史记录（自 <code>v1.0.0.alpha</code> 起）。
     </p>
 
     <div class="stats-row">
