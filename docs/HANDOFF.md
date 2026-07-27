@@ -8,7 +8,7 @@
 
 ## 1. 一句话结论
 
-从「测试一装即挂、零 CI」到 **`pnpm test` 265 通过 + typecheck 干净 + build 通过 + zip 产物 + 首个 CI**，净删约 2969 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug；volc 的 TS 适配层与 MAIN-world overlay 均已去重（§4.1），版本漂移已根治，MAIN-world 消息处理器已加跨窗口守卫。已在**全新 `pnpm install --frozen-lockfile` 环境**下验证 install→typecheck→test→build→zip 全绿（开箱即用）。剩余仅为**产品/品牌/发布决策**（命名统一、下载链接与站内更新日志、ESLint 专项），见 §4.2。
+从「测试一装即挂、零 CI」到 **`pnpm test` 265 通过 + typecheck 干净 + build 通过 + zip 产物 + 首个 CI**，净删约 2969 行（死代码 + 去重），并修复了包括「抢到后误报支付成功」「抢到后拉不起支付弹窗」在内的多个真实 bug；volc 的 TS 适配层与 MAIN-world overlay 均已去重（§4.1），版本漂移已根治，MAIN-world 消息处理器已加跨窗口守卫。命名已统一为「抢购助手」、补写了 v1.5.0 站内更新日志、并加入了最小 ESLint 基线 + CI Lint 步。已在**全新 `pnpm install --frozen-lockfile` 环境**下验证 install→typecheck→lint→test→build→zip 全绿（开箱即用）。仅剩两项很小的人工残留：发布 1.5.0 Release 并回填下载链接、把 lint 覆盖扩大到 IIFE/Svelte（见 §4.2）。
 
 ---
 
@@ -16,7 +16,7 @@
 
 | 类别 | 内容 |
 |------|------|
-| 工程 | `fix(test)` 恢复 Vitest 启动（Vite 8 Rolldown optimizer 的 `node:module`，旧 `deps.optimizer` 开关已失效）；`chore(ci)` 新增 `typecheck` 脚本 + GitHub Actions |
+| 工程 | `fix(test)` 恢复 Vitest 启动（Vite 8 Rolldown optimizer 的 `node:module`，旧 `deps.optimizer` 开关已失效）；`chore(ci)` 新增 `typecheck`/`lint` 脚本 + GitHub Actions（install→typecheck→lint→test→build）；最小 ESLint 基线（`eslint.config.mjs`）|
 | 高危 bug | `fix(payment)` 支付轮询把信封 `code===200` 误判为付款成功（未付即报“已确认”）→ 只按 `data.status`；`findPayComponent()` 提前缓存失败致抢到后拉不起支付弹窗 → 只缓存成功 |
 | 正确性 | 提醒横幅模板插值 bug；时钟校准偏晚（Date 秒级量化 + `+rtt/2` 重复补偿）；OK 成功角标提前消失；通知“稍后提醒”空操作；volc catalog 互相覆盖；BURST 标签 200/500ms；Fire Matrix 日志空白；L1 顶栏单次注入 |
 | 安全 | OCR 服务 CORS `*` → 平台白名单；`MAX_CONTENT_LENGTH`；对 permutations 输入设上限防阶乘级 DoS |
@@ -83,16 +83,16 @@ pnpm build       # build-overlay → wxt build → verify-no-minifier-collision
 - 补 `tests/unit/volc-codingplan-main/`（pricing + order），照抄 agentplan 的 `_harness.ts` 与 `pricing.test.ts`，把标识符前缀与产品码换成 codingplan（`__volc_codingplan_fetchPrice`、`ark_bd`、`Coding_Plan_*`）。这直接消除「codingplan overlay 零测试」的确认发现，且不动生产代码。
 - 可加一个「结构一致性」测试：读两目录、对差异 token 归一化后断言剩余内容一致，从而**自动捕获未来漂移**——在不做去重的前提下解决该发现的核心风险。
 
-### 4.2 需产品/发布决策的项（**仅剩这些需人工**）
-- **命名统一**：目录 `miaosha-GLM` / package `qianggou-GLM` / manifest `抢购助手` / README `智谱秒杀助手`，且混用「秒杀 / 抢购」。属品牌决策，需维护者定一个规范名与术语后统一。
-- **README 下载链接 + 站内更新日志**：README 下载链接指向上游 v1.4.2 release（本 fork 无 1.5.0 release，直接改会 404）；`entrypoints/options/App.svelte` 与 `ReleaseLogPage.svelte` 的更新日志仍是 v1.4.2 文案。发 1.5.0 release 时一并更新，并补写 1.5.0 更新日志（内容需维护者定）。
-- **ESLint/Prettier**：对 ~6.4k 行手写 IIFE 引入 lint/format 会一次性涌现大量既有告警（Prettier 更会产生巨量重排 diff），应作为独立 PR（先定规则、配置 IIFE 全局、再批量修），否则会破坏 `pnpm build`/CI 的「开箱即用」。
+### 4.2 仅剩的人工残留（很小）
+- **发布 1.5.0 Release**：README「方式一」下载链接仍指向上游 v1.4.2 预编译包（本 fork 无 1.5.0 release，故未改链接以免 404）。维护者发布 1.5.0 release 后，把该链接指向新资产即可（或用 `pnpm zip` 产出的 `output/qianggou-glm-1.5.0-chrome.zip` 作为发布资产）。「方式二从源码构建」已是获取最新的推荐路径。
+- **扩大 lint 覆盖**：当前 ESLint 基线（见 §4.3）**未覆盖** `src/*`（手写 IIFE，含隐式跨文件全局）与 `.svelte`（需 svelte 插件）。后续可作为独立 PR：为 IIFE 配置全局、引入 `eslint-plugin-svelte`，再逐步收严规则（Prettier 若引入会产生大量重排 diff，也宜单独进行）。
 
-### 4.3 本轮已补做（原「剩余」项）
-- ✅ **版本漂移**：`build-overlay.js` 现把 `__PKG_VERSION__` 占位替换为 package 版本（overlay 回退版本不再漂移）；`zip-prepare.mjs` 早已从 package 版本派生 zip 名。
-- ✅ **MAIN-world `e.source` 检查**：5 个处理器已加 `e.source && e.source !== window`（跨窗口拦截，同窗口/测试无 source 派发放行）。
-- ✅ **`client.ts` 单测**（parseResponseBody / buildHeaders / findBigmodelTabId / testEndpoint 错误路径）。
-- ✅ **`isReady()` 平台化**：接受 `authorization`（bigmodel）或 `x-csrf-token`（volcengine）。
+### 4.3 本轮已补做（原「剩余」项均已落地）
+- ✅ **命名统一**：规范名定为 manifest 的「抢购助手」（平台中立）；package 名规范为小写 `qianggou-glm`（与 zip 名一致）；README 标题改为「抢购助手（原·智谱秒杀助手）」+ 多平台框定；术语说明「秒杀」指定时开售机制。
+- ✅ **v1.5.0 更新日志**：`ReleaseLogPage.svelte` 补写本轮改动条目（页头已按 package 版本动态显示 v1.5.0）；`App.svelte` 侧栏标题去掉硬编码版本。
+- ✅ **ESLint 基线**：`eslint.config.mjs` 最小高信号规则（仅 possible-problems，绿）、`pnpm lint` 脚本、CI 新增 Lint 步；覆盖 `lib/**`、`entrypoints/**`、`tests/**` TS 与 `scripts/**`。
+- ✅ **版本漂移**：`build-overlay.js` 把 `__PKG_VERSION__` 占位替换为 package 版本；`zip-prepare.mjs` 早已从 package 版本派生 zip 名。
+- ✅ **MAIN-world `e.source` 检查**、**`client.ts` 单测**、**`isReady()` 平台化**（详见各自提交）。
 
 ---
 

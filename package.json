@@ -7,6 +7,7 @@
     "build:overlay": "node scripts/build-overlay.js",
     "build": "node scripts/build-overlay.js && wxt build && node scripts/verify-no-minifier-collision.mjs",
     "typecheck": "wxt prepare && tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -20,6 +21,7 @@
     ]
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",
@@ -27,11 +29,14 @@
     "@types/chrome": "0.2.2",
     "@vitest/ui": "^4.1.7",
     "@wxt-dev/module-svelte": "^2.0.5",
+    "eslint": "^9.39.5",
     "fake-indexeddb": "^6.2.5",
+    "globals": "^17.8.0",
     "happy-dom": "^20.9.0",
     "svelte": "^5.55.10",
     "terser": "^5.48.0",
     "typescript": "^5.8.3",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.7",
     "wxt": "^0.20.26"
   }
