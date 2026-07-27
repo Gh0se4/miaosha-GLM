@@ -296,6 +296,8 @@ document.head.appendChild(script);
 3. 渲染秒杀覆盖层 UI（拖拽、商品选择、ticket 计数、一键开火）
 4. 监听覆盖层 UI 事件 → `window.postMessage` → bm-capture
 
+> **火山引擎 overlay（多平台）**：bigmodel 的 overlay 源码在 `src/bm-main/`。火山引擎 Agent Plan 与 Coding Plan 的 overlay 逻辑完全一致（仅产品码 / 展示名 / 付款路径不同），因此共用一份实现 `src/volc-shared/`；每个变体目录（`src/volc-agentplan-main/`、`src/volc-codingplan-main/`）**只保留 `00-config.js`**。`scripts/build-overlay.js` 依据 `SHARED_INCLUDES` 把「变体 `00-config.js` + `volc-shared` 模块」拼成 `public/volc-<variant>-main.js`。共享模块内的标识符统一为 `__volc_` 前缀且均为 IIFE 局部，两个 overlay 即便同时注入同一页面也不会冲突。
+
 ---
 
 ## 9. 构建与开发
@@ -318,7 +320,9 @@ document.head.appendChild(script);
 │   │                               #   runtime-calibration、payment-status-notifier
 │   ├── platform/                   # 多平台适配层（registry + adapters/*）
 │   └── settings/                   # sale-time / captcha / fire / dev 配置
-├── src/*-main/                     # 各平台 MAIN world 注入脚本源码
+├── src/bm-main/                    # bigmodel MAIN world 注入脚本源码
+├── src/volc-shared/                # 火山引擎两变体共用的 overlay 源码
+├── src/volc-*-main/                # 各火山变体仅 00-config.js（与 volc-shared 组装）
 ├── public/                         # 生成的 <platform>-main.js + DNR 规则（生成物不提交）
 ├── ocr-service/                    # 本地点选验证码 OCR 服务（可选）
 ├── output/chrome-mv3/              # 构建产物（不提交 git）

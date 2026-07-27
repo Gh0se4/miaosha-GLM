@@ -2,7 +2,7 @@
 
 > **智谱 Coding Plan 秒杀助手** — Chrome MV3 浏览器扩展，辅助抢购 bigmodel.cn 限量套餐。
 
-**当前版本：v1.4.2。** 秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
+**当前源码版本：v1.5.0**（以 `package.json` 为准；最新预编译发布包见下方「快速开始」）。秒杀网站的防护策略持续升级，本项目的成功率也在动态变化。我们非常欢迎社区贡献代码、反馈问题、分享经验。
 
 ---
 
@@ -152,7 +152,9 @@ unzip miaosha-glm-1.4.2-chrome.zip
 │   ├── api/                         # Fire 调度/执行、时钟校准、票分配、支付轮询
 │   ├── platform/                    # 多平台适配层（registry + bigmodel / 火山引擎 adapters）
 │   └── settings/                    # 秒杀时间、验证码、Fire 策略配置
-├── src/*-main/                      # 各平台 MAIN world 注入脚本源码（构建为 IIFE）
+├── src/bm-main/                     # bigmodel MAIN world 注入脚本源码（构建为 IIFE）
+├── src/volc-shared/                 # 火山引擎两变体共用的 overlay 源码（Agent/Coding Plan）
+├── src/volc-*-main/                 # 各火山变体仅保留 00-config.js（与 volc-shared 组装）
 ├── public/                          # 自动生成的注入脚本（勿手动编辑）+ declarativeNetRequest 规则
 ├── ocr-service/                     # 本地点选验证码 OCR 服务（ddddocr，可选）
 ├── scripts/                         # 构建脚本（overlay 构建 + zip 打包 + 产物校验）
@@ -160,7 +162,7 @@ unzip miaosha-glm-1.4.2-chrome.zip
 └── docs/                            # 架构文档、实现计划与规格
 ```
 
-> **多平台支持**：本扩展最初面向 bigmodel.cn（智谱 GLM Coding Plan），现已通过 `lib/platform` 适配层扩展支持火山引擎（volcengine.com）的 Agent Plan / Coding Plan 抢购。各平台的 MAIN world 注入脚本源码位于 `src/<platform>-main/`，由 `scripts/build-overlay.js` 编译为 `public/<platform>-main.js`。
+> **多平台支持**：本扩展最初面向 bigmodel.cn（智谱 GLM Coding Plan），现已通过 `lib/platform` 适配层扩展支持火山引擎（volcengine.com）的 Agent Plan / Coding Plan 抢购。MAIN world 注入脚本由 `scripts/build-overlay.js` 编译为 `public/<platform>-main.js`：bigmodel 源码在 `src/bm-main/`；火山引擎两个变体共用 `src/volc-shared/` 的实现，各变体目录仅保留 `00-config.js`（产品码 / 展示名 / 付款路径等差异），构建时「变体配置 + 共享模块」组装为对应的 overlay。
 
 ---
 

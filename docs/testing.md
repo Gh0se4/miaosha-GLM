@@ -45,9 +45,10 @@ batch-preview API → auth 捕获 → 产品矩阵构建 → 产品卡片 UI →
 |----|------|----------|------|
 | 纯逻辑 | `lib/api/catalog.ts`, `01-utils.js` | Vitest (无环境) | 极快 |
 | 存储层 | `lib/api/auth-store.ts`, `lib/settings/*.ts` | Vitest + fakeBrowser | 快 |
-| bm-main JS | `src/bm-main/*.js` | Vitest + vm 沙箱 | 快 |
+| 平台适配层 | `lib/platform/adapters/**`（含 volc order-pipeline / bundle-parser） | Vitest + `setMainWorldFetcher` mock | 快 |
+| overlay JS | `src/bm-main/*.js`、`src/volc-shared/*.js` | Vitest + vm 沙箱 | 快 |
 | Svelte 组件 | `entrypoints/popup/**/*.svelte` | @testing-library/svelte | 中 |
-| Chrome API 集成 | `lib/api/auth-store.captureFromTab` | Vitest + vi.mock | 中 |
+| Chrome API 集成 | `lib/api/client.ts`, `auth-store.captureFromTab` | Vitest + fakeBrowser / vi.mock | 中 |
 | E2E 回归 | — | 已删除 | — |
 
 ### 原则 3：测试行为，不测实现
@@ -61,9 +62,9 @@ batch-preview API → auth 捕获 → 产品矩阵构建 → 产品卡片 UI →
 `tests/setup.ts` 全局调用 `fakeBrowser.reset()`，保证各测试看到干净的 `chrome.storage`。  
 **不要在测试之间共享状态。**
 
-### 原则 5：bm-main 模块必须包含依赖链
+### 原则 5：overlay 模块必须包含依赖链
 
-`src/bm-main/*.js` 按数字顺序设计，后者依赖前者的全局变量：
+`src/bm-main/*.js` 与 `src/volc-shared/*.js` 均按数字顺序设计，后者依赖前者的全局变量：
 
 ```
 01-utils → inferBillingFromPreview, formatAmount ...
@@ -71,12 +72,12 @@ batch-preview API → auth 捕获 → 产品矩阵构建 → 产品卡片 UI →
 05-product → buildProductMatrix (uses both 01 and 02)
 ```
 
-加载时 **必须按顺序包含所有依赖文件**，否则会出现 `ReferenceError: _planOrder is not defined`。
+加载时 **必须按顺序包含所有依赖文件**，否则会出现 `ReferenceError`。各自的 harness：
+`tests/unit/bm-main/_harness.ts`（bm-main）、`tests/unit/volc-shared/_harness.ts`（火山共享 overlay）。
 
 ### 原则 6：永不手动编辑生成文件
 
-`public/bm-main.js` 和 `output/chrome-mv3/bm-main.js` 是自动生成的。  
-测试 `src/bm-main/*.js` 原始源文件，不测生成产物。
+`public/*-main.js` 与 `output/chrome-mv3/*-main.js` 由 `scripts/build-overlay.js` 自动生成（已全部 gitignore）。测试 `src/bm-main/*.js` 与 `src/volc-shared/*.js` 原始源文件，不测生成产物。火山引擎两个变体只有 `00-config.js`，共享逻辑在 `src/volc-shared/`（见 `docs/architecture.md` §8）。
 
 ---
 
